@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
-#[allow(dead_code)]
+// --- Type Definitions --- //
+
 #[derive(Debug, Deserialize)]
-struct RustDoc {
+pub struct RustDoc {
     root: String,
     crate_version: String,
     includes_private: bool,
@@ -12,7 +13,7 @@ struct RustDoc {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct RustDocItem {
+pub struct RustDocItem {
     docs: Option<String>,
     visibility: Option<String>,
     name: Option<String>,
@@ -33,7 +34,7 @@ struct EnumDetails {
 #[derive(Debug, Deserialize, Serialize)]
 struct EnumVariant {
     name: String,
-    // Add other fields as needed like docs, attributes, etc.
+    docs: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -155,6 +156,310 @@ struct QualifiedPath {
     trait_: Option<ResolvedPath>,
 }
 
+// --- Implementations --- //
+
+impl RustDoc {
+    pub fn print(&self) {
+        println!("Crate Documentation");
+        println!("==================");
+        println!();
+        println!("Root: {}", self.root);
+        println!("Version: {}", self.crate_version);
+        println!("Includes private items: {}", self.includes_private);
+        println!();
+        println!("Items");
+        println!("-----");
+        println!();
+
+        for (id, item) in &self.index {
+            // Only print items from this crate (those starting with "0:")
+            if id.starts_with("0:") {
+                item.print();
+            }
+        }
+    }
+}
+
+impl RustDocItem {
+    pub fn print(&self) {
+        if let Some(name) = &self.name {
+            // Skip items without docs or non-public items
+            let Some(docs) = &self.docs else { return };
+            if self.visibility.as_deref() != Some("public") {
+                return;
+            };
+
+            println!("---");
+            println!();
+            println!("`{name}`:");
+            println!();
+
+            // Handle different item types
+            if let Some(inner) = &self.inner {
+                // Print function signatures
+                if let Some(f) = &inner.function {
+                    f.decl.print(name);
+                    println!();
+                }
+
+                // Print enum variants if it's an enum
+                if let Some(enum_details) = &inner.enum_ {
+                    println!("```rust");
+                    println!("pub enum {name} {{");
+                    for variant in &enum_details.variants {
+                        if let Some(docs) = &variant.docs {
+                            println!("    /// {}", docs);
+                        }
+                        println!("    {},", variant.name);
+                    }
+                    println!("}}");
+                    println!("```");
+                    println!();
+                }
+            }
+
+            println!("{docs}");
+            println!();
+        }
+    }
+}
+
+impl FunctionDecl {
+    fn print(&self, name: &str) {
+        print!("```rust\npub fn {name}(");
+
+        let params = self
+            .inputs
+            .iter()
+            .map(|(name, param)| format!("{name}: {}", param.format()))
+            .collect::<Vec<_>>();
+        print!("{}", params.join(", "));
+
+        print!(")");
+
+        if let Some(ret) = &self.output {
+            print!(" -> {ret}");
+        }
+
+        println!(";\n```");
+    }
+}
+
+impl Parameter {
+    fn format(&self) -> String {
+        match self {
+            Self::BorrowedRef { borrowed_ref } => {
+                let lifetime = borrowed_ref
+                    .lifetime
+                    .as_ref()
+                    .map(|lt| format!("{lt} "))
+                    .unwrap_or_default();
+                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
+                format!(
+                    "&{lifetime}{mutability}{}",
+                    borrowed_ref.type_.format()
+                )
+            }
+            Self::Primitive { primitive } => primitive.to_string(),
+            Self::ResolvedPath { resolved_path } => {
+                if let Some(args) = &resolved_path.args {
+                    let formatted_args: Vec<String> = args
+                        .angle_bracketed
+                        .args
+                        .iter()
+                        .map(|arg| arg.format())
+                        .collect();
+                    if formatted_args.is_empty() {
+                        resolved_path.name.clone()
+                    } else {
+                        format!(
+                            "{}<{}>",
+                            resolved_path.name,
+                            formatted_args.join(", ")
+                        )
+                    }
+                } else {
+                    resolved_path.name.clone()
+                }
+            }
+            Self::Generic { generic } => generic.clone(),
+            Self::Array { array, len } => {
+                format!("[{}; {}]", array.format(), len)
+            }
+            Self::Slice { slice } => {
+                format!("[{}]", slice.format())
+            }
+            Self::RawPointer { raw_pointer } => {
+                let mutability =
+                    if raw_pointer.mutable { "mut" } else { "const" };
+                format!("*{} {}", mutability, &raw_pointer.type_)
+            }
+        }
+    }
+}
+
+impl GenericArg {
+    fn format(&self) -> String {
+        match self {
+            Self::Type { type_inner } => {
+                if let Some(primitive) = &type_inner.primitive {
+                    primitive.clone()
+                } else if let Some(slice) = &type_inner.slice {
+                    format!("[{}]", slice.primitive)
+                } else {
+                    "/* unknown type */".to_string()
+                }
+            }
+            Self::Lifetime { lifetime } => lifetime.clone(),
+        }
+    }
+}
+
+impl ParameterType {
+    fn format(&self) -> String {
+        match self {
+            Self::Primitive { primitive } => primitive.to_string(),
+            Self::Generic { generic } => generic.clone(),
+            Self::ResolvedPath { resolved_path } => {
+                if let Some(args) = &resolved_path.args {
+                    let formatted_args: Vec<String> = args
+                        .angle_bracketed
+                        .args
+                        .iter()
+                        .map(|arg| arg.format())
+                        .collect();
+                    if formatted_args.is_empty() {
+                        resolved_path.name.clone()
+                    } else {
+                        format!(
+                            "{}<{}>",
+                            resolved_path.name,
+                            formatted_args.join(", ")
+                        )
+                    }
+                } else {
+                    resolved_path.name.clone()
+                }
+            }
+            Self::Qualified { qualified_path } => {
+                let args = qualified_path
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        let formatted_args: Vec<String> = args
+                            .angle_bracketed
+                            .args
+                            .iter()
+                            .map(|arg| arg.format())
+                            .collect();
+                        if formatted_args.is_empty() {
+                            String::new()
+                        } else {
+                            format!("<{}>", formatted_args.join(", "))
+                        }
+                    })
+                    .unwrap_or_default();
+
+                format!("{}{}", qualified_path.name, args)
+            }
+            Self::Slice { slice } => format!("[{}]", slice.primitive),
+        }
+    }
+}
+
+impl ReturnType {
+    fn format(&self) -> String {
+        match self {
+            Self::Primitive { primitive } => primitive.to_string(),
+            Self::ResolvedPath { resolved_path } => {
+                if let Some(args) = &resolved_path.args {
+                    let formatted_args: Vec<String> = args
+                        .angle_bracketed
+                        .args
+                        .iter()
+                        .map(|arg| arg.format())
+                        .collect();
+                    if formatted_args.is_empty() {
+                        resolved_path.name.clone()
+                    } else {
+                        format!(
+                            "{}<{}>",
+                            resolved_path.name,
+                            formatted_args.join(", ")
+                        )
+                    }
+                } else {
+                    resolved_path.name.clone()
+                }
+            }
+            Self::Array { array } => {
+                format!("[{}; {}]", array.type_.format(), array.len)
+            }
+            Self::BorrowedRef { borrowed_ref } => {
+                let lifetime = borrowed_ref
+                    .lifetime
+                    .as_ref()
+                    .map(|lt| format!("{lt} "))
+                    .unwrap_or_default();
+                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
+                format!(
+                    "&{lifetime}{mutability}{}",
+                    borrowed_ref.type_.format()
+                )
+            }
+            Self::Tuple { tuple } =>
+                if tuple.is_empty() {
+                    "()".to_string()
+                } else {
+                    format!(
+                        "({})",
+                        tuple
+                            .iter()
+                            .map(Self::format)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                },
+            Self::Generic { generic } => generic.clone(),
+            Self::Qualified { qualified_path } => {
+                let args = qualified_path
+                    .args
+                    .as_ref()
+                    .map(|args| {
+                        let formatted_args: Vec<String> = args
+                            .angle_bracketed
+                            .args
+                            .iter()
+                            .map(|arg| arg.format())
+                            .collect();
+                        if formatted_args.is_empty() {
+                            String::new()
+                        } else {
+                            format!("<{}>", formatted_args.join(", "))
+                        }
+                    })
+                    .unwrap_or_default();
+
+                format!("{}{}", qualified_path.name, args)
+            }
+            Self::Slice { slice } => {
+                format!("[{}]", slice.format())
+            }
+            Self::RawPointer { raw_pointer } => {
+                let mutability =
+                    if raw_pointer.mutable { "mut" } else { "const" };
+                format!("*{} {}", mutability, raw_pointer.type_.format())
+            }
+        }
+    }
+}
+
+impl fmt::Display for ReturnType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.format())
+    }
+}
+
 #[cfg(test)]
 mod test {
     use serde_json::Value;
@@ -164,9 +469,9 @@ mod test {
     const HEX_JSON_STR: &str = include_str!("../test-data/hex/rustdoc.json");
 
     #[test]
-    fn test_parse() {
+    fn test_parse_individual() {
         // First parse as generic JSON
-        let json: Value = serde_json::from_str(HEX_JSON_STR).unwrap();
+        let json = serde_json::from_str::<Value>(HEX_JSON_STR).unwrap();
 
         // Get the index object
         let index = json
@@ -176,306 +481,21 @@ mod test {
 
         // Try to parse each item
         for (id, item_value) in index {
-            // Skip items not from this crate (those not starting with "0:")
-            if !id.starts_with("0:") {
-                continue;
-            }
-
-            match serde_json::from_value::<RustDocItem>(item_value.clone()) {
-                Ok(item) => {
-                    if let Some(name) = &item.name {
-                        // Skip items without docs or non-public items
-                        let Some(docs) = &item.docs else { continue };
-                        if item.visibility.as_deref() != Some("public") {
-                            continue;
-                        };
-
-                        println!("---");
-                        println!();
-                        println!("`{name}`:");
-                        println!();
-
-                        // Handle different item types
-                        if let Some(inner) = &item.inner {
-                            // Print function signatures
-                            if let Some(f) = &inner.function {
-                                print_function_signature(name, &f.decl);
-                                println!();
-                            }
-
-                            // Print enum variants if it's an enum
-                            if let Value::Object(inner_obj) =
-                                &item_value["inner"]
-                            {
-                                if let Some(Value::Object(enum_obj)) =
-                                    inner_obj.get("enum")
-                                {
-                                    if let Some(Value::Array(variants)) =
-                                        enum_obj.get("variants")
-                                    {
-                                        println!("```rust");
-                                        println!("pub enum {name} {{");
-                                        for variant in variants {
-                                            if let Some(variant_name) = variant
-                                                .get("name")
-                                                .and_then(Value::as_str)
-                                            {
-                                                println!(
-                                                    "    {},",
-                                                    variant_name
-                                                );
-                                            }
-                                        }
-                                        println!("}}");
-                                        println!("```");
-                                        println!();
-                                    }
-                                }
-                            }
-                        }
-
-                        println!("{docs}");
-                        println!();
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to parse item {id}:");
-                    eprintln!("Error: {e}");
-                    eprintln!(
-                        "JSON: {}",
-                        serde_json::to_string_pretty(item_value).unwrap()
-                    );
-                    panic!("Failed to parse item");
-                }
+            if let Err(e) =
+                serde_json::from_value::<RustDocItem>(item_value.clone())
+            {
+                eprintln!(
+                    "JSON: {}",
+                    serde_json::to_string_pretty(item_value).unwrap()
+                );
+                panic!("Failed to parse item {id}: {e}");
             }
         }
     }
 
-    fn print_function_signature(name: &str, decl: &FunctionDecl) {
-        print!("```rust\npub fn {name}(");
-
-        let params: Vec<String> = decl
-            .inputs
-            .iter()
-            .map(|(name, param)| format!("{name}: {}", format_parameter(param)))
-            .collect();
-        print!("{}", params.join(", "));
-
-        print!(")");
-
-        if let Some(ret) = &decl.output {
-            print!(" -> {}", format_return_type(ret));
-        }
-
-        println!(";\n```");
-    }
-
-    fn format_parameter_type(param: &ParameterType) -> String {
-        match param {
-            ParameterType::Primitive { primitive } => primitive.to_string(),
-            ParameterType::Generic { generic } => generic.clone(),
-            ParameterType::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(format_generic_arg)
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            ParameterType::Qualified { qualified_path } => {
-                let args = qualified_path
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        let formatted_args: Vec<String> = args
-                            .angle_bracketed
-                            .args
-                            .iter()
-                            .map(format_generic_arg)
-                            .collect();
-                        if formatted_args.is_empty() {
-                            String::new()
-                        } else {
-                            format!("<{}>", formatted_args.join(", "))
-                        }
-                    })
-                    .unwrap_or_default();
-
-                format!("{}{}", qualified_path.name, args)
-            }
-            ParameterType::Slice { slice } => format!("[{}]", slice.primitive),
-        }
-    }
-
-    fn format_parameter(param: &Parameter) -> String {
-        match param {
-            Parameter::BorrowedRef { borrowed_ref } => {
-                let lifetime = borrowed_ref
-                    .lifetime
-                    .as_ref()
-                    .map(|lt| format!("{lt} "))
-                    .unwrap_or_default();
-                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
-                format!(
-                    "&{lifetime}{mutability}{}",
-                    format_parameter_type(&borrowed_ref.type_)
-                )
-            }
-            Parameter::Primitive { primitive } => primitive.to_string(),
-            Parameter::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(format_generic_arg)
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            Parameter::Generic { generic } => generic.clone(),
-            Parameter::Array { array, len } => {
-                format!("[{}; {}]", format_parameter(array), len)
-            }
-            Parameter::Slice { slice } => {
-                format!("[{}]", format_parameter(slice))
-            }
-            Parameter::RawPointer { raw_pointer } => {
-                let mutability =
-                    if raw_pointer.mutable { "mut" } else { "const" };
-                format!(
-                    "*{} {}",
-                    mutability,
-                    format_return_type(&raw_pointer.type_)
-                )
-            }
-        }
-    }
-
-    fn format_return_type(ret: &ReturnType) -> String {
-        match ret {
-            ReturnType::Primitive { primitive } => primitive.to_string(),
-            ReturnType::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(format_generic_arg)
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            ReturnType::Array { array } => {
-                format!("[{}; {}]", format_return_type(&array.type_), array.len)
-            }
-            ReturnType::BorrowedRef { borrowed_ref } => {
-                let lifetime = borrowed_ref
-                    .lifetime
-                    .as_ref()
-                    .map(|lt| format!("{lt} "))
-                    .unwrap_or_default();
-                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
-                format!(
-                    "&{lifetime}{mutability}{}",
-                    format_parameter_type(&borrowed_ref.type_)
-                )
-            }
-            ReturnType::Tuple { tuple } =>
-                if tuple.is_empty() {
-                    "()".to_string()
-                } else {
-                    format!(
-                        "({})",
-                        tuple
-                            .iter()
-                            .map(format_return_type)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                },
-            ReturnType::Generic { generic } => generic.clone(),
-            ReturnType::Qualified { qualified_path } => {
-                let args = qualified_path
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        let formatted_args: Vec<String> = args
-                            .angle_bracketed
-                            .args
-                            .iter()
-                            .map(format_generic_arg)
-                            .collect();
-                        if formatted_args.is_empty() {
-                            String::new()
-                        } else {
-                            format!("<{}>", formatted_args.join(", "))
-                        }
-                    })
-                    .unwrap_or_default();
-
-                format!("{}{}", qualified_path.name, args)
-            }
-            ReturnType::Slice { slice } => {
-                format!("[{}]", format_return_type(slice))
-            }
-            ReturnType::RawPointer { raw_pointer } => {
-                let mutability =
-                    if raw_pointer.mutable { "mut" } else { "const" };
-                format!(
-                    "*{} {}",
-                    mutability,
-                    format_return_type(&raw_pointer.type_)
-                )
-            }
-        }
-    }
-
-    fn format_generic_arg(arg: &GenericArg) -> String {
-        match arg {
-            GenericArg::Type { type_inner } => {
-                if let Some(primitive) = &type_inner.primitive {
-                    primitive.clone()
-                } else if let Some(slice) = &type_inner.slice {
-                    format!("[{}]", slice.primitive)
-                } else {
-                    "/* unknown type */".to_string()
-                }
-            }
-            GenericArg::Lifetime { lifetime } => lifetime.clone(),
-        }
+    #[test]
+    fn test_parse_all() {
+        let doc = serde_json::from_str::<RustDoc>(HEX_JSON_STR).unwrap();
+        doc.print();
     }
 }
