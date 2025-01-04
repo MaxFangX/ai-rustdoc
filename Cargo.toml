@@ -1,5 +1,5 @@
 [package]
-name = "ai-doc"
+name = "ai-rustdoc"
 version = "0.0.0"
 edition = "2021"
 
