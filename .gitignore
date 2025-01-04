@@ -1,3 +1,4 @@
 /target
 .aider*
 **/.DS_Store
+*.vim
