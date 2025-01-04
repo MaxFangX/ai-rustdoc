@@ -22,6 +22,18 @@ struct RustDocItem {
 #[derive(Debug, Deserialize, Serialize)]
 struct ItemInner {
     function: Option<FunctionDetails>,
+    enum_: Option<EnumDetails>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EnumDetails {
+    variants: Vec<EnumVariant>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EnumVariant {
+    name: String,
+    // Add other fields as needed like docs, attributes, etc.
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -149,7 +161,7 @@ mod test {
 
     use super::*;
 
-    const HEX_JSON_STR: &str = include_str!("../hex.json");
+    const HEX_JSON_STR: &str = include_str!("../test-data/hex/rustdoc.json");
 
     #[test]
     fn test_parse() {
@@ -164,6 +176,11 @@ mod test {
 
         // Try to parse each item
         for (id, item_value) in index {
+            // Skip items not from this crate (those not starting with "0:")
+            if !id.starts_with("0:") {
+                continue;
+            }
+
             match serde_json::from_value::<RustDocItem>(item_value.clone()) {
                 Ok(item) => {
                     if let Some(name) = &item.name {
@@ -173,16 +190,52 @@ mod test {
                             continue;
                         };
 
-                        println!("## `hex::{name}`:\n");
-                        println!("{docs}\n");
+                        println!("---");
+                        println!();
+                        println!("`{name}`:");
+                        println!();
 
-                        if let Some(ItemInner { function: Some(f) }) =
-                            &item.inner
-                        {
-                            println!("### Signature:\n");
-                            print_function_signature(name, &f.decl);
-                            println!("\n---\n");
+                        // Handle different item types
+                        if let Some(inner) = &item.inner {
+                            // Print function signatures
+                            if let Some(f) = &inner.function {
+                                print_function_signature(name, &f.decl);
+                                println!();
+                            }
+
+                            // Print enum variants if it's an enum
+                            if let Value::Object(inner_obj) =
+                                &item_value["inner"]
+                            {
+                                if let Some(Value::Object(enum_obj)) =
+                                    inner_obj.get("enum")
+                                {
+                                    if let Some(Value::Array(variants)) =
+                                        enum_obj.get("variants")
+                                    {
+                                        println!("```rust");
+                                        println!("pub enum {name} {{");
+                                        for variant in variants {
+                                            if let Some(variant_name) = variant
+                                                .get("name")
+                                                .and_then(Value::as_str)
+                                            {
+                                                println!(
+                                                    "    {},",
+                                                    variant_name
+                                                );
+                                            }
+                                        }
+                                        println!("}}");
+                                        println!("```");
+                                        println!();
+                                    }
+                                }
+                            }
                         }
+
+                        println!("{docs}");
+                        println!();
                     }
                 }
                 Err(e) => {
