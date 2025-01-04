@@ -1,1 +1,6 @@
 /target
+.aider*
+**/.DS_Store
+
+# Example rustdoc JSON out that I'm iterating on. TODO(max): Remove
+hex.json
