@@ -16,8 +16,9 @@ local-ci:
     cargo test
     cargo doc --document-private-items
 
-# Continuously iterate on something.
+# Continuously iterate on something
 iterate *args:
+    # e.g. `just iterate cargo test test_parse_individual -- --show-output`
     cargo watch \
         --watch . \
         --why \

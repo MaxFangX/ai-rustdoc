@@ -52,21 +52,47 @@ struct FunctionDecl {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum Parameter {
-    BorrowedRef { borrowed_ref: Box<BorrowedRef> },
+    BorrowedRef { borrowed_ref: Box<BorrowedRefParam> },
     Primitive { primitive: String },
-    ResolvedPath { resolved_path: Box<ResolvedPath> },
     Generic { generic: String },
-    Array { array: Box<Parameter>, len: String },
+    ResolvedPath { resolved_path: Box<ResolvedPath> },
+    Qualified { qualified_path: Box<QualifiedPath> },
     Slice { slice: Box<Parameter> },
+    Array { array: Box<ParameterArrayType> },
     RawPointer { raw_pointer: Box<RawPointer> },
+    ImplTrait { impl_trait: Vec<ImplTrait> },
+    DynTrait { dyn_trait: Box<DynTrait> },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct BorrowedRef {
+struct DynTrait {
+    lifetime: Option<String>,
+    traits: Vec<TraitBound>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ParameterArrayType {
+    len: String,
+    #[serde(rename = "type")]
+    type_: Box<Parameter>,
+}
+
+// For function parameters:
+#[derive(Debug, Deserialize, Serialize)]
+struct BorrowedRefParam {
     lifetime: Option<String>,
     mutable: bool,
     #[serde(rename = "type")]
-    type_: Box<ParameterType>,
+    type_: Box<Parameter>,
+}
+
+// For function return types:
+#[derive(Debug, Deserialize, Serialize)]
+struct BorrowedRefReturn {
+    lifetime: Option<String>,
+    mutable: bool,
+    #[serde(rename = "type")]
+    type_: Box<ReturnType>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -77,14 +103,56 @@ struct ResolvedPath {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct GenericArgs {
-    angle_bracketed: AngleBracketed,
+#[serde(untagged)]
+enum GenericArgs {
+    AngleBracketed {
+        angle_bracketed: AngleBracketed,
+    },
+    Parenthesized {
+        parenthesized: ParenthesizedGenericArgs,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ParenthesizedGenericArgs {
+    inputs: Vec<Parameter>,
+    output: Option<Box<ReturnType>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AngleBracketed {
     args: Vec<GenericArg>,
-    bindings: Vec<String>,
+    #[serde(default)]
+    bindings: Vec<TypeBinding>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TypeBinding {
+    // This is typically something like `Item`, `Output`, etc.
+    name: String,
+
+    // If the binding has sub-args; if not, these can be omitted.
+    #[serde(default)]
+    args: Option<GenericArgs>,
+
+    // For example, it can be an equality constraint, or something else.
+    // The "binding" field in rustdoc JSON can hold multiple forms,
+    // e.g. `equality` or `constraint`. We’ll parse what we see.
+    binding: BindingKind,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum BindingKind {
+    Equality { equality: EqualityConstraint },
+    // Possibly other variants if needed, e.g. `Constraint { ... }`
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EqualityConstraint {
+    // Rustdoc uses `"type"` for the equality’s right-hand side
+    #[serde(rename = "type")]
+    type_: Box<ReturnType>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -113,26 +181,58 @@ struct SliceContent {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 enum ReturnType {
-    ResolvedPath { resolved_path: Box<ResolvedPath> },
-    BorrowedRef { borrowed_ref: Box<BorrowedRef> },
-    Primitive { primitive: String },
-    Generic { generic: String },
-    Qualified { qualified_path: Box<QualifiedPath> },
-    Array { array: Box<ArrayType> },
-    Tuple { tuple: Vec<ReturnType> },
-    Slice { slice: Box<ReturnType> },
-    RawPointer { raw_pointer: Box<RawPointer> },
+    ResolvedPath {
+        resolved_path: Box<ResolvedPath>,
+    },
+    BorrowedRef {
+        borrowed_ref: Box<BorrowedRefReturn>,
+    },
+    Primitive {
+        primitive: String,
+    },
+    Generic {
+        generic: String,
+    },
+    Qualified {
+        qualified_path: Box<QualifiedPath>,
+    },
+    Array {
+        array: Box<ArrayType>,
+    },
+    Tuple {
+        tuple: Vec<ReturnType>,
+    },
+    Slice {
+        slice: Box<ReturnType>,
+    },
+    RawPointer {
+        raw_pointer: Box<RawPointer>,
+    },
+    ImplTrait {
+        impl_trait: Vec<ImplTrait>,
+    },
+    // --- Add this variant ---
+    DynTrait {
+        dyn_trait: Box<DynTrait>,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-enum ParameterType {
-    Primitive { primitive: String },
-    Generic { generic: String },
-    ResolvedPath { resolved_path: Box<ResolvedPath> },
-    Qualified { qualified_path: Box<QualifiedPath> },
-    Slice { slice: Box<SliceContent> },
+struct ImplTrait {
+    trait_bound: TraitBound,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TraitBound {
+    generic_params: Vec<GenericParam>,
+    #[serde(default)]
+    modifier: Option<String>,
+    #[serde(rename = "trait")]
+    trait_: ResolvedPath,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GenericParam {}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ArrayType {
@@ -183,7 +283,6 @@ impl RustDoc {
 impl RustDocItem {
     pub fn print(&self) {
         if let Some(name) = &self.name {
-            // Skip items without docs or non-public items
             let Some(docs) = &self.docs else { return };
             if self.visibility.as_deref() != Some("public") {
                 return;
@@ -194,15 +293,11 @@ impl RustDocItem {
             println!("`{name}`:");
             println!();
 
-            // Handle different item types
             if let Some(inner) = &self.inner {
-                // Print function signatures
                 if let Some(f) = &inner.function {
                     f.decl.print(name);
                     println!();
                 }
-
-                // Print enum variants if it's an enum
                 if let Some(enum_details) = &inner.enum_ {
                     println!("```rust");
                     println!("pub enum {name} {{");
@@ -228,12 +323,14 @@ impl FunctionDecl {
     fn print(&self, name: &str) {
         print!("```rust\npub fn {name}(");
 
-        let params = self
-            .inputs
-            .iter()
-            .map(|(name, param)| format!("{name}: {}", param.format()))
-            .collect::<Vec<_>>();
-        print!("{}", params.join(", "));
+        let mut first = true;
+        for (param_name, param) in &self.inputs {
+            if !first {
+                print!(", ");
+            }
+            print!("{param_name}: {param}");
+            first = false;
+        }
 
         print!(")");
 
@@ -242,59 +339,6 @@ impl FunctionDecl {
         }
 
         println!(";\n```");
-    }
-}
-
-impl Parameter {
-    fn format(&self) -> String {
-        match self {
-            Self::BorrowedRef { borrowed_ref } => {
-                let lifetime = borrowed_ref
-                    .lifetime
-                    .as_ref()
-                    .map(|lt| format!("{lt} "))
-                    .unwrap_or_default();
-                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
-                format!(
-                    "&{lifetime}{mutability}{}",
-                    borrowed_ref.type_.format()
-                )
-            }
-            Self::Primitive { primitive } => primitive.to_string(),
-            Self::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(|arg| arg.format())
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            Self::Generic { generic } => generic.clone(),
-            Self::Array { array, len } => {
-                format!("[{}; {}]", array.format(), len)
-            }
-            Self::Slice { slice } => {
-                format!("[{}]", slice.format())
-            }
-            Self::RawPointer { raw_pointer } => {
-                let mutability =
-                    if raw_pointer.mutable { "mut" } else { "const" };
-                format!("*{} {}", mutability, &raw_pointer.type_)
-            }
-        }
     }
 }
 
@@ -315,140 +359,70 @@ impl GenericArg {
     }
 }
 
-impl ParameterType {
-    fn format(&self) -> String {
+impl fmt::Display for Parameter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Primitive { primitive } => primitive.to_string(),
-            Self::Generic { generic } => generic.clone(),
-            Self::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(|arg| arg.format())
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            Self::Qualified { qualified_path } => {
-                let args = qualified_path
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        let formatted_args: Vec<String> = args
-                            .angle_bracketed
-                            .args
-                            .iter()
-                            .map(|arg| arg.format())
-                            .collect();
-                        if formatted_args.is_empty() {
-                            String::new()
-                        } else {
-                            format!("<{}>", formatted_args.join(", "))
-                        }
-                    })
-                    .unwrap_or_default();
-
-                format!("{}{}", qualified_path.name, args)
-            }
-            Self::Slice { slice } => format!("[{}]", slice.primitive),
-        }
-    }
-}
-
-impl ReturnType {
-    fn format(&self) -> String {
-        match self {
-            Self::Primitive { primitive } => primitive.to_string(),
-            Self::ResolvedPath { resolved_path } => {
-                if let Some(args) = &resolved_path.args {
-                    let formatted_args: Vec<String> = args
-                        .angle_bracketed
-                        .args
-                        .iter()
-                        .map(|arg| arg.format())
-                        .collect();
-                    if formatted_args.is_empty() {
-                        resolved_path.name.clone()
-                    } else {
-                        format!(
-                            "{}<{}>",
-                            resolved_path.name,
-                            formatted_args.join(", ")
-                        )
-                    }
-                } else {
-                    resolved_path.name.clone()
-                }
-            }
-            Self::Array { array } => {
-                format!("[{}; {}]", array.type_.format(), array.len)
-            }
             Self::BorrowedRef { borrowed_ref } => {
-                let lifetime = borrowed_ref
-                    .lifetime
-                    .as_ref()
-                    .map(|lt| format!("{lt} "))
-                    .unwrap_or_default();
-                let mutability = if borrowed_ref.mutable { "mut " } else { "" };
-                format!(
-                    "&{lifetime}{mutability}{}",
-                    borrowed_ref.type_.format()
+                if let Some(lt) = &borrowed_ref.lifetime {
+                    write!(f, "&{} ", lt)?;
+                } else {
+                    write!(f, "&")?;
+                }
+                if borrowed_ref.mutable {
+                    write!(f, "mut ")?;
+                }
+                write!(f, "{}", borrowed_ref.type_)
+            }
+            Self::Primitive { primitive } => write!(f, "{}", primitive),
+            Self::Qualified { qualified_path } => {
+                write!(
+                    f,
+                    "{}{}",
+                    qualified_path.name,
+                    format_angle_bracketed_args(qualified_path.args.as_ref())
                 )
             }
-            Self::Tuple { tuple } =>
-                if tuple.is_empty() {
-                    "()".to_string()
+            Self::Generic { generic } => write!(f, "{}", generic),
+            Self::ResolvedPath { resolved_path } => {
+                write!(
+                    f,
+                    "{}{}",
+                    resolved_path.name,
+                    format_angle_bracketed_args(resolved_path.args.as_ref())
+                )
+            }
+            Self::Slice { slice } => write!(f, "[{}]", slice),
+            Self::Array { array } => {
+                write!(f, "[{}; {}]", array.type_, array.len)
+            }
+            Self::RawPointer { raw_pointer } =>
+                if raw_pointer.mutable {
+                    write!(f, "*mut {}", raw_pointer.type_)
                 } else {
-                    format!(
-                        "({})",
-                        tuple
-                            .iter()
-                            .map(Self::format)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
+                    write!(f, "*const {}", raw_pointer.type_)
                 },
-            Self::Generic { generic } => generic.clone(),
-            Self::Qualified { qualified_path } => {
-                let args = qualified_path
-                    .args
-                    .as_ref()
-                    .map(|args| {
-                        let formatted_args: Vec<String> = args
-                            .angle_bracketed
-                            .args
-                            .iter()
-                            .map(|arg| arg.format())
-                            .collect();
-                        if formatted_args.is_empty() {
-                            String::new()
-                        } else {
-                            format!("<{}>", formatted_args.join(", "))
-                        }
+            Self::ImplTrait { impl_trait } => {
+                let bounds = impl_trait
+                    .iter()
+                    .map(|item| item.trait_bound.trait_.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                write!(f, "impl {}", bounds)
+            }
+            Self::DynTrait { dyn_trait } => {
+                let joined_traits = dyn_trait
+                    .traits
+                    .iter()
+                    .map(|tb| {
+                        let name = &tb.trait_.name;
+                        let args = format_angle_bracketed_args(
+                            tb.trait_.args.as_ref(),
+                        );
+                        format!("{name}{args}")
                     })
-                    .unwrap_or_default();
-
-                format!("{}{}", qualified_path.name, args)
-            }
-            Self::Slice { slice } => {
-                format!("[{}]", slice.format())
-            }
-            Self::RawPointer { raw_pointer } => {
-                let mutability =
-                    if raw_pointer.mutable { "mut" } else { "const" };
-                format!("*{} {}", mutability, raw_pointer.type_.format())
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                write!(f, "dyn {}", joined_traits)
             }
         }
     }
@@ -456,7 +430,106 @@ impl ReturnType {
 
 impl fmt::Display for ReturnType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.format())
+        match self {
+            Self::Primitive { primitive } => write!(f, "{}", primitive),
+            Self::ResolvedPath { resolved_path } => {
+                write!(
+                    f,
+                    "{}{}",
+                    resolved_path.name,
+                    format_angle_bracketed_args(resolved_path.args.as_ref())
+                )
+            }
+            Self::Array { array } => {
+                write!(f, "[{}; {}]", array.type_, array.len)
+            }
+            Self::BorrowedRef { borrowed_ref } => {
+                if let Some(lt) = &borrowed_ref.lifetime {
+                    write!(f, "&{} ", lt)?;
+                } else {
+                    write!(f, "&")?;
+                }
+                if borrowed_ref.mutable {
+                    write!(f, "mut ")?;
+                }
+                write!(f, "{}", borrowed_ref.type_)
+            }
+            Self::Tuple { tuple } =>
+                if tuple.is_empty() {
+                    write!(f, "()")
+                } else {
+                    write!(f, "(")?;
+                    for (i, t) in tuple.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{}", t)?;
+                    }
+                    write!(f, ")")
+                },
+            Self::Generic { generic } => write!(f, "{}", generic),
+            Self::Qualified { qualified_path } => {
+                write!(
+                    f,
+                    "{}{}",
+                    qualified_path.name,
+                    format_angle_bracketed_args(qualified_path.args.as_ref())
+                )
+            }
+            Self::Slice { slice } => write!(f, "[{}]", slice),
+            Self::RawPointer { raw_pointer } =>
+                if raw_pointer.mutable {
+                    write!(f, "*mut {}", raw_pointer.type_)
+                } else {
+                    write!(f, "*const {}", raw_pointer.type_)
+                },
+            Self::ImplTrait { impl_trait } => {
+                let bounds = impl_trait
+                    .iter()
+                    .map(|item| item.trait_bound.trait_.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                write!(f, "impl {}", bounds)
+            }
+            Self::DynTrait { dyn_trait } => {
+                let joined_traits = dyn_trait
+                    .traits
+                    .iter()
+                    .map(|tb| {
+                        let name = &tb.trait_.name;
+                        let args = format_angle_bracketed_args(
+                            tb.trait_.args.as_ref(),
+                        );
+                        format!("{name}{args}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                write!(f, "dyn {}", joined_traits)
+            }
+        }
+    }
+}
+
+fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
+    match args {
+        None => String::new(),
+        Some(GenericArgs::AngleBracketed { angle_bracketed }) => {
+            let formatted_args = angle_bracketed
+                .args
+                .iter()
+                .map(|arg| arg.format())
+                .collect::<Vec<_>>();
+            if formatted_args.is_empty() {
+                String::new()
+            } else {
+                format!("<{}>", formatted_args.join(", "))
+            }
+        }
+        Some(GenericArgs::Parenthesized { parenthesized: _ }) => {
+            String::new()
+            // TODO(max): If we want to print them, do something like:
+            // format!("({}...)", ...)
+        }
     }
 }
 
@@ -466,29 +539,64 @@ mod test {
 
     use super::*;
 
+    const COMMON_JSON_STR: &str =
+        include_str!("../test-data/common/rustdoc.json");
     const HEX_JSON_STR: &str = include_str!("../test-data/hex/rustdoc.json");
 
+    /// This test is designed for quickly debugging parsing errors.
+    ///
+    /// # Workflow
+    ///
+    /// ```bash
+    /// $ just iterate cargo test test_parse_individual
+    /// ```
+    ///
+    /// Query an advanced GPT with something like:
+    ///
+    /// ```
+    /// I'm working on a crate which parse rustdoc outputs. There's one item
+    /// it's getting stuck on, caught in the tests. There may be a bug
+    /// somewhere. Here's the code and test output which I think should contain
+    /// enough info for you to be able to diagnose the issue. Can you help? If
+    /// you spot any fixes, please indicate which sections should be modified
+    /// along with the exact code that it should be modified to. Don't forget to
+    /// update the `Display` implementations if a new enum variant was added.
+    ///
+    /// <code>
+    ///
+    /// <failed test output>
+    /// ```
     #[test]
     fn test_parse_individual() {
-        // First parse as generic JSON
-        let json = serde_json::from_str::<Value>(HEX_JSON_STR).unwrap();
+        do_test(HEX_JSON_STR);
+        do_test(COMMON_JSON_STR);
 
-        // Get the index object
-        let index = json
-            .get("index")
-            .and_then(Value::as_object)
-            .expect("Expected 'index' to be an object");
+        fn do_test(json_str: &str) {
+            // First parse as generic JSON
+            let json = serde_json::from_str::<Value>(json_str).unwrap();
 
-        // Try to parse each item
-        for (id, item_value) in index {
-            if let Err(e) =
-                serde_json::from_value::<RustDocItem>(item_value.clone())
-            {
-                eprintln!(
-                    "JSON: {}",
-                    serde_json::to_string_pretty(item_value).unwrap()
-                );
-                panic!("Failed to parse item {id}: {e}");
+            // Get the index object
+            let index = json
+                .get("index")
+                .and_then(Value::as_object)
+                .expect("Expected 'index' to be an object");
+
+            let mut num_parsed = 0;
+
+            // Try to parse each item
+            for (id, item_value) in index {
+                match serde_json::from_value::<RustDocItem>(item_value.clone())
+                {
+                    Ok(_) => num_parsed += 1,
+                    Err(e) => {
+                        eprintln!("Failed to parse item {id}: {e}");
+                        eprintln!(
+                            "JSON: {}",
+                            serde_json::to_string_pretty(item_value).unwrap()
+                        );
+                        panic!("Failed after {num_parsed} parsed items");
+                    }
+                }
             }
         }
     }
