@@ -23,12 +23,14 @@ pub struct RustDocItem {
 #[derive(Debug, Deserialize, Serialize)]
 struct ItemInner {
     function: Option<FunctionDetails>,
+    #[serde(rename = "enum")]
     enum_: Option<EnumDetails>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct EnumDetails {
-    variants: Vec<EnumVariant>,
+    variants: Vec<String>,
+    variants_stripped: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -274,14 +276,14 @@ impl RustDoc {
         for (id, item) in &self.index {
             // Only print items from this crate (those starting with "0:")
             if id.starts_with("0:") {
-                item.print();
+                item.print(self);
             }
         }
     }
 }
 
 impl RustDocItem {
-    pub fn print(&self) {
+    fn print(&self, doc: &RustDoc) {
         if let Some(name) = &self.name {
             let Some(docs) = &self.docs else { return };
             // NOTE: We might want to restrict to public items only.
@@ -303,11 +305,15 @@ impl RustDocItem {
                 if let Some(enum_details) = &inner.enum_ {
                     println!("```rust");
                     println!("pub enum {name} {{");
-                    for variant in &enum_details.variants {
-                        if let Some(docs) = &variant.docs {
-                            println!("    /// {}", docs);
+                    for variant_id in &enum_details.variants {
+                        if let Some(variant) = doc.index.get(variant_id) {
+                            if let Some(docs) = &variant.docs {
+                                println!("    /// {}", docs);
+                            }
+                            if let Some(name) = &variant.name {
+                                println!("    {},", name);
+                            }
                         }
-                        println!("    {},", variant.name);
                     }
                     println!("}}");
                     println!("```");
@@ -576,7 +582,7 @@ mod test {
                 }
 
                 println!("--- Formatted Output ---");
-                item.print();
+                item.print(&rust_doc);
                 println!("=== End Item ===");
             }
         }
