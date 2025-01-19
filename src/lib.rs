@@ -569,21 +569,23 @@ mod test {
         for (id, item) in &rust_doc.index {
             if id.starts_with("0:") {
                 println!();
-                println!("=== Item ID: {id} ===");
-                println!();
+                println!("======== ~ Item ~ ========");
+                println!("ID: {id}");
 
-                // Get the raw JSON for this item
+                println!("--- Markdown ---");
+                item.print(&rust_doc);
+
+                println!("--- Debug ---");
+                println!("{item:#?}");
+
                 if let Some(item_json) = index_json.get(id) {
                     println!("--- Raw JSON ---");
                     let item_json_pretty =
                         serde_json::to_string_pretty(item_json).unwrap();
                     println!("{item_json_pretty}");
-                    println!();
                 }
 
-                println!("--- Formatted Output ---");
-                item.print(&rust_doc);
-                println!("=== End Item ===");
+                println!("======== End Item ========");
             }
         }
     }
