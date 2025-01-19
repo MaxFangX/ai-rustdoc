@@ -308,10 +308,10 @@ impl RustDocItem {
                     for variant_id in &enum_details.variants {
                         if let Some(variant) = doc.index.get(variant_id) {
                             if let Some(docs) = &variant.docs {
-                                println!("    /// {}", docs);
+                                println!("    /// {docs}");
                             }
                             if let Some(name) = &variant.name {
-                                println!("    {},", name);
+                                println!("    {name},");
                             }
                         }
                     }
