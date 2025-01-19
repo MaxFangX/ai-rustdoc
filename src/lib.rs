@@ -284,9 +284,11 @@ impl RustDocItem {
     pub fn print(&self) {
         if let Some(name) = &self.name {
             let Some(docs) = &self.docs else { return };
-            if self.visibility.as_deref() != Some("public") {
-                return;
-            };
+            // NOTE: We might want to restrict to public items only.
+            // For now, we print everything.
+            // if self.visibility.as_deref() != Some("public") {
+            //     return;
+            // }
 
             println!("---");
             println!();
@@ -542,6 +544,39 @@ mod test {
     const COMMON_JSON_STR: &str =
         include_str!("../test-data/common/rustdoc.json");
     const HEX_JSON_STR: &str = include_str!("../test-data/hex/rustdoc.json");
+
+    /// ```bash
+    /// $ cargo test print_hex_docs -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore]
+    fn print_hex_docs() {
+        // Parse as generic JSON first
+        let json = serde_json::from_str::<Value>(HEX_JSON_STR).unwrap();
+        let index = json.get("index").and_then(Value::as_object).unwrap();
+
+        // Print all items from this crate
+        for (id, item_json) in index {
+            // Try to parse this specific item
+            match serde_json::from_value::<RustDocItem>(item_json.clone()) {
+                Ok(item) =>
+                    if id.starts_with("0:") {
+                        println!();
+                        println!("=== Item ID: {id} ===");
+                        println!();
+                        println!("--- Raw JSON ---");
+                        let item_json_pretty =
+                            serde_json::to_string_pretty(item_json).unwrap();
+                        println!("{item_json_pretty}");
+                        println!();
+                        println!("--- Formatted Output ---");
+                        item.print();
+                        println!("=== End Item ===");
+                    },
+                Err(e) => eprintln!("Failed to parse item {id}: {e}"),
+            }
+        }
+    }
 
     /// This test is designed for quickly debugging parsing errors.
     ///

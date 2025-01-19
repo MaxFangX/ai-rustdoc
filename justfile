@@ -15,6 +15,7 @@ local-ci:
     cargo fmt --all -- --check
     cargo test
     cargo doc --document-private-items
+    cargo test print_hex_docs -- --ignored --nocapture
 
 # Continuously iterate on something
 iterate *args:
