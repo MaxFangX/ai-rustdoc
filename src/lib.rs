@@ -14,10 +14,24 @@ pub struct RustDoc {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RustDocItem {
+    #[serde(default)]
     docs: Option<String>,
+    #[serde(default)]
     visibility: Option<String>,
+    #[serde(default)]
     name: Option<String>,
+    #[serde(default)]
     inner: Option<ItemInner>,
+    #[serde(default)]
+    attrs: Vec<serde_json::Value>,
+    #[serde(default)]
+    crate_id: u32,
+    #[serde(default)]
+    deprecation: Option<serde_json::Value>,
+    #[serde(default)]
+    links: serde_json::Map<String, serde_json::Value>,
+    #[serde(skip_deserializing)]
+    span: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -25,12 +39,48 @@ struct ItemInner {
     function: Option<FunctionDetails>,
     #[serde(rename = "enum")]
     enum_: Option<EnumDetails>,
+    #[serde(rename = "impl")]
+    impl_: Option<Impl>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Impl {
+    #[serde(rename = "trait", default)]
+    trait_: Option<ImplTrait>,
+    #[serde(rename = "for")]
+    for_: Option<Parameter>,
+    items: Vec<String>,
+    is_unsafe: bool,
+    negative: bool,
+    synthetic: bool,
+    blanket_impl: Option<BlanketImpl>,
+    generics: Option<Generics>,
+    provided_trait_methods: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ImplFor {
+    #[serde(rename = "resolved_path")]
+    resolved_path: ResolvedPath,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ImplTrait {
+    name: String,
+    id: Option<String>,
+    args: Option<GenericArgs>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct BlanketImpl {
+    generic: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct EnumDetails {
     variants: Vec<String>,
     variants_stripped: bool,
+    impls: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -62,7 +112,7 @@ enum Parameter {
     Slice { slice: Box<Parameter> },
     Array { array: Box<ParameterArrayType> },
     RawPointer { raw_pointer: Box<RawPointer> },
-    ImplTrait { impl_trait: Vec<ImplTrait> },
+    ImplTrait { impl_trait: Vec<ImplTraitBound> },
     DynTrait { dyn_trait: Box<DynTrait> },
 }
 
@@ -139,7 +189,7 @@ struct TypeBinding {
 
     // For example, it can be an equality constraint, or something else.
     // The "binding" field in rustdoc JSON can hold multiple forms,
-    // e.g. `equality` or `constraint`. We’ll parse what we see.
+    // e.g. `equality` or `constraint`. We'll parse what we see.
     binding: BindingKind,
 }
 
@@ -152,7 +202,7 @@ enum BindingKind {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct EqualityConstraint {
-    // Rustdoc uses `"type"` for the equality’s right-hand side
+    // Rustdoc uses `"type"` for the equality's right-hand side
     #[serde(rename = "type")]
     type_: Box<ReturnType>,
 }
@@ -167,12 +217,27 @@ enum GenericArg {
     Lifetime {
         lifetime: String,
     },
+    Const {
+        #[serde(rename = "const")]
+        const_: ConstGeneric,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ConstGeneric {
+    expr: String,
+    #[serde(default)]
+    is_literal: bool,
+    #[serde(default)]
+    value: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct TypeContent {
     primitive: Option<String>,
     slice: Option<SliceContent>,
+    tuple: Option<Vec<ReturnType>>,
+    resolved_path: Option<ResolvedPath>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -211,7 +276,7 @@ enum ReturnType {
         raw_pointer: Box<RawPointer>,
     },
     ImplTrait {
-        impl_trait: Vec<ImplTrait>,
+        impl_trait: Vec<ImplTraitBound>,
     },
     // --- Add this variant ---
     DynTrait {
@@ -220,7 +285,7 @@ enum ReturnType {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ImplTrait {
+struct ImplTraitBound {
     trait_bound: TraitBound,
 }
 
@@ -232,6 +297,15 @@ struct TraitBound {
     #[serde(rename = "trait")]
     trait_: ResolvedPath,
 }
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Generics {
+    params: Vec<GenericParam>,
+    where_predicates: Vec<WherePredicate>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct WherePredicate {}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct GenericParam {}
@@ -286,22 +360,59 @@ impl RustDocItem {
     fn print(&self, doc: &RustDoc) {
         if let Some(name) = &self.name {
             let Some(docs) = &self.docs else { return };
-            // NOTE: We might want to restrict to public items only.
-            // For now, we print everything.
+
+            // TODO(max): For now, we print everything, but we will eventually
+            // want to restrict to public items only. Leave this to reuse later:
             // if self.visibility.as_deref() != Some("public") {
             //     return;
             // }
 
-            println!("---");
-            println!();
             println!("`{name}`:");
+            println!();
+            println!("{docs}");
             println!();
 
             if let Some(inner) = &self.inner {
+                // Collect all implemented traits
+                let mut traits = Vec::new();
+                if let Some(enum_details) = &inner.enum_ {
+                    for impl_id in &enum_details.impls {
+                        if let Some(impl_item) = doc.index.get(impl_id) {
+                            if let Some(inner) = &impl_item.inner {
+                                if let Some(impl_) = &inner.impl_ {
+                                    // Get trait path by finding the crate id
+                                    // from the impl_id
+                                    let crate_prefix =
+                                        if impl_id.starts_with("b:") {
+                                            "std::"
+                                        } else if impl_id.starts_with("a:") {
+                                            "alloc::"
+                                        } else {
+                                            ""
+                                        };
+
+                                    // Push the trait name
+                                    if let Some(trait_) = &impl_.trait_ {
+                                        traits.push(format!(
+                                            "{}{}",
+                                            crate_prefix, trait_.name
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Sort and deduplicate traits
+                traits.sort();
+                traits.dedup();
+
                 if let Some(f) = &inner.function {
                     f.decl.print(name);
                     println!();
                 }
+
                 if let Some(enum_details) = &inner.enum_ {
                     println!("```rust");
                     println!("pub enum {name} {{");
@@ -319,9 +430,17 @@ impl RustDocItem {
                     println!("```");
                     println!();
                 }
+
+                // Print traits if we found any
+                if !traits.is_empty() {
+                    println!("**Implements:**");
+                    for trait_ in traits {
+                        println!("- {}", trait_);
+                    }
+                    println!();
+                }
             }
 
-            println!("{docs}");
             println!();
         }
     }
@@ -358,11 +477,34 @@ impl GenericArg {
                     primitive.clone()
                 } else if let Some(slice) = &type_inner.slice {
                     format!("[{}]", slice.primitive)
+                } else if let Some(tuple) = &type_inner.tuple {
+                    if tuple.is_empty() {
+                        "()".to_string()
+                    } else {
+                        format!(
+                            "({})",
+                            tuple
+                                .iter()
+                                .map(|t| t.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    }
+                } else if let Some(resolved_path) = &type_inner.resolved_path {
+                    let args = format_angle_bracketed_args(
+                        resolved_path.args.as_ref(),
+                    );
+                    format!("{}{args}", resolved_path.name)
                 } else {
                     "/* unknown type */".to_string()
                 }
             }
             Self::Lifetime { lifetime } => lifetime.clone(),
+            Self::Const { const_ } => {
+                // For now, we could just return the expr,
+                // or do something fancier if you like
+                const_.expr.clone()
+            }
         }
     }
 }
