@@ -46,6 +46,8 @@ struct ItemInner {
     struct_: Option<StructDetails>,
     #[serde(rename = "trait")]
     trait_: Option<TraitInfo>,
+    #[serde(rename = "variant")]
+    variant: Option<EnumVariantDetails>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -86,12 +88,21 @@ struct EnumDetails {
     variants: Vec<String>,
     variants_stripped: bool,
     impls: Vec<String>,
+    #[serde(default)]
+    generics: Option<Generics>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct EnumVariant {
     name: String,
     docs: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct EnumVariantDetails {
+    #[serde(default)]
+    discriminant: Option<serde_json::Value>,
+    kind: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -354,6 +365,7 @@ impl RustDoc {
         let mut traits = Vec::new();
         let mut impls = Vec::new();
         let mut others = Vec::new();
+        let mut enum_variants = Vec::new();
 
         for (id, item) in &self.index {
             // Only process items from this crate (those starting with "0:")
@@ -361,8 +373,9 @@ impl RustDoc {
                 continue;
             }
 
-            // Skip items without names
-            if item.name.is_none() {
+            // Skip items without names (except for impls, which we handle
+            // separately)
+            if item.name.is_none() && !item.is_impl() {
                 continue;
             }
 
@@ -374,10 +387,14 @@ impl RustDoc {
                     enums.push((id, item));
                 } else if self.is_trait(item) {
                     traits.push((id, item));
-                } else if inner.impl_.is_some() {
+                } else if inner.impl_.is_some() && item.name.is_some() {
+                    // Only include impls that have names (trait implementations
+                    // for specific types)
                     impls.push((id, item));
                 } else if self.is_struct(item) {
                     structs.push((id, item));
+                } else if item.is_enum_variant() {
+                    enum_variants.push((id, item));
                 } else {
                     others.push((id, item));
                 }
@@ -427,6 +444,14 @@ impl RustDoc {
             }
         }
 
+        if !enum_variants.is_empty() {
+            println!("## Enum Variants");
+            println!();
+            for (_, item) in enum_variants {
+                item.print(self);
+            }
+        }
+
         if !others.is_empty() {
             println!("## Other Items");
             println!();
@@ -470,6 +495,18 @@ impl RustDoc {
 }
 
 impl RustDocItem {
+    // Helper method to check if this item is an impl
+    fn is_impl(&self) -> bool {
+        if let Some(inner) = &self.inner {
+            if let Ok(inner_json) = serde_json::to_value(inner) {
+                if let Some(obj) = inner_json.as_object() {
+                    return obj.contains_key("impl");
+                }
+            }
+        }
+        false
+    }
+
     fn print(&self, doc: &RustDoc) {
         if let Some(name) = &self.name {
             // Allow items without docs for trait impls
@@ -484,24 +521,33 @@ impl RustDocItem {
 
             // Print header with appropriate markdown heading level
             let visibility = self.visibility.as_deref().unwrap_or("default");
-            println!(
-                "### {}{}",
-                if visibility == "public" { "pub " } else { "" },
-                name
-            );
+
+            // Check if this is an enum variant
+            if self.is_enum_variant() {
+                println!("#### `{}`", name);
+            } else {
+                println!(
+                    "### {}{}",
+                    if visibility == "public" { "pub " } else { "" },
+                    name
+                );
+            }
             println!();
 
             // Print documentation if available
             if !docs_content.is_empty() {
-                println!("{docs_content}");
+                // Process documentation to properly format links
+                let processed_docs =
+                    self.process_documentation(docs_content, doc);
+                println!("{}", processed_docs);
                 println!();
             }
 
             if let Some(inner) = &self.inner {
                 // Collect all implemented traits
                 let mut traits = Vec::new();
-                if let Some(enum_details) = &inner.enum_ {
-                    for impl_id in &enum_details.impls {
+                let mut collect_traits_from_impls = |impl_list: &[String]| {
+                    for impl_id in impl_list {
                         if let Some(impl_item) = doc.index.get(impl_id) {
                             if let Some(inner) = &impl_item.inner {
                                 if let Some(impl_) = &inner.impl_ {
@@ -527,6 +573,14 @@ impl RustDocItem {
                             }
                         }
                     }
+                };
+
+                if let Some(enum_details) = &inner.enum_ {
+                    collect_traits_from_impls(&enum_details.impls);
+                }
+
+                if let Some(struct_details) = &inner.struct_ {
+                    collect_traits_from_impls(&struct_details.impls);
                 }
 
                 // Sort and deduplicate traits
@@ -539,16 +593,133 @@ impl RustDocItem {
                     println!();
                 }
 
+                // Handle enum variant
+                if self.is_enum_variant() {
+                    if let Some(variant_inner) = &inner.variant {
+                        println!("```rust");
+
+                        // Check the kind of variant
+                        if let Some(kind_obj) = variant_inner.kind.as_object() {
+                            // Handle tuple variant
+                            if let Some(tuple) = kind_obj.get("tuple") {
+                                if let Some(tuple_array) = tuple.as_array() {
+                                    if !tuple_array.is_empty() {
+                                        print!("{}(", name);
+                                        for (i, _field) in
+                                            tuple_array.iter().enumerate()
+                                        {
+                                            if i > 0 {
+                                                print!(", ");
+                                            }
+                                            print!("/* field type */");
+                                        }
+                                        println!("),");
+                                    } else {
+                                        println!("{}(),", name);
+                                    }
+                                } else {
+                                    println!("{},", name);
+                                }
+                            }
+                            // Handle struct variant
+                            else if let Some(struct_fields) =
+                                kind_obj.get("struct")
+                            {
+                                if let Some(fields_array) =
+                                    struct_fields.as_array()
+                                {
+                                    if !fields_array.is_empty() {
+                                        println!("{} {{", name);
+                                        // We'd need to look up each field by ID
+                                        println!("    // fields...");
+                                        println!("{}}},", name);
+                                    } else {
+                                        println!("{} {{}},", name);
+                                    }
+                                } else {
+                                    println!("{},", name);
+                                }
+                            }
+                            // Handle plain variant
+                            else if let Some(kind_str) = kind_obj.get("kind")
+                            {
+                                if let Some(kind) = kind_str.as_str() {
+                                    if kind == "plain" {
+                                        // Show discriminant if available
+                                        if let Some(discriminant) =
+                                            &variant_inner.discriminant
+                                        {
+                                            if let Some(expr) =
+                                                discriminant.get("expr")
+                                            {
+                                                if let Some(expr_str) =
+                                                    expr.as_str()
+                                                {
+                                                    println!(
+                                                        "{} = {},",
+                                                        name, expr_str
+                                                    );
+                                                } else {
+                                                    println!("{},", name);
+                                                }
+                                            } else if let Some(disc_str) =
+                                                discriminant.as_str()
+                                            {
+                                                println!(
+                                                    "{} = {},",
+                                                    name, disc_str
+                                                );
+                                            } else {
+                                                println!("{},", name);
+                                            }
+                                        } else {
+                                            println!("{},", name);
+                                        }
+                                    } else {
+                                        println!("{},", name);
+                                    }
+                                } else {
+                                    println!("{},", name);
+                                }
+                            } else {
+                                println!("{},", name);
+                            }
+                        } else {
+                            println!("{},", name);
+                        }
+
+                        println!("```");
+                        println!();
+                    }
+                }
+
                 // Print enum definitions with more detailed formatting
                 if let Some(enum_details) = &inner.enum_ {
                     println!("```rust");
-                    println!("pub enum {name} {{");
+
+                    // Print enum generics if available
+                    if let Some(generics) = &enum_details.generics {
+                        if !generics.params.is_empty() {
+                            // For now just indicate generics with <...>
+                            println!("pub enum {name}<...> {{");
+                        } else {
+                            println!("pub enum {name} {{");
+                        }
+                    } else {
+                        println!("pub enum {name} {{");
+                    }
+
                     for variant_id in &enum_details.variants {
                         if let Some(variant) = doc.index.get(variant_id) {
                             if let Some(docs) = &variant.docs {
-                                println!("    /// {docs}");
+                                // Split multi-line docs into proper doc
+                                // comments
+                                for line in docs.lines() {
+                                    println!("    /// {}", line);
+                                }
                             }
                             if let Some(name) = &variant.name {
+                                // TODO: Add variant fields when available
                                 println!("    {name},");
                             }
                         }
@@ -561,10 +732,69 @@ impl RustDocItem {
                 // Print struct definitions with fields
                 if let Some(struct_details) = &inner.struct_ {
                     println!("```rust");
+
+                    // Print struct generics if available
+                    let generics_str = if let Some(generics) =
+                        &struct_details.generics
+                    {
+                        let mut params = Vec::new();
+                        for param in &generics.params {
+                            if let Ok(json_value) = serde_json::to_value(param)
+                            {
+                                if let Some(obj) = json_value.as_object() {
+                                    if let Some(kind) = obj.get("kind") {
+                                        if let Some(kind_obj) = kind.as_object()
+                                        {
+                                            if let Some(_lifetime) =
+                                                kind_obj.get("lifetime")
+                                            {
+                                                if let Some(name) =
+                                                    obj.get("name")
+                                                {
+                                                    if let Some(name_str) =
+                                                        name.as_str()
+                                                    {
+                                                        params.push(
+                                                            name_str
+                                                                .to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            } else if let Some(_type_param) =
+                                                kind_obj.get("type")
+                                            {
+                                                if let Some(name) =
+                                                    obj.get("name")
+                                                {
+                                                    if let Some(name_str) =
+                                                        name.as_str()
+                                                    {
+                                                        params.push(
+                                                            name_str
+                                                                .to_string(),
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if !params.is_empty() {
+                            format!("<{}>", params.join(", "))
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::new()
+                    };
+
                     if let Some(kind) = &struct_details.kind {
                         match kind {
                             StructKind::Tuple { tuple } if tuple.is_some() => {
-                                print!("pub struct {name}(");
+                                print!("pub struct {name}{generics_str}(");
                                 let mut first = true;
                                 for field_id in &struct_details.fields {
                                     if let Some(field) = doc.index.get(field_id)
@@ -580,8 +810,7 @@ impl RustDocItem {
                                             print!("pub ");
                                         }
                                         // This is a simplification - we'd need
-                                        // to
-                                        // extract the type
+                                        // to extract the type
                                         print!("/* field type */");
                                         first = false;
                                     }
@@ -589,18 +818,22 @@ impl RustDocItem {
                                 println!(");");
                             }
                             StructKind::Unit(_) => {
-                                println!("pub struct {name};");
+                                println!("pub struct {name}{generics_str};");
                             }
                             _ => {
-                                println!("pub struct {name}(); // Unknown struct kind");
+                                println!("pub struct {name}{generics_str}(); // Unknown struct kind");
                             }
                         }
                     } else {
-                        println!("pub struct {name} {{");
+                        println!("pub struct {name}{generics_str} {{");
                         for field_id in &struct_details.fields {
                             if let Some(field) = doc.index.get(field_id) {
                                 if let Some(docs) = &field.docs {
-                                    println!("    /// {docs}");
+                                    // Split multi-line docs into proper doc
+                                    // comments
+                                    for line in docs.lines() {
+                                        println!("    /// {}", line);
+                                    }
                                 }
                                 if let Some(field_name) = &field.name {
                                     let visibility = field
@@ -641,6 +874,64 @@ impl RustDocItem {
 
             println!();
         }
+    }
+
+    // Helper method to check if this item is an enum variant
+    fn is_enum_variant(&self) -> bool {
+        if let Some(inner) = &self.inner {
+            if let Ok(inner_json) = serde_json::to_value(inner) {
+                if let Some(obj) = inner_json.as_object() {
+                    return obj.contains_key("variant");
+                }
+            }
+        }
+        false
+    }
+
+    // Process documentation to handle links properly
+    fn process_documentation(&self, docs: &str, doc: &RustDoc) -> String {
+        if self.links.is_empty() {
+            return docs.to_string();
+        }
+
+        let mut processed = docs.to_string();
+        for (link_text, target_id_str) in &self.links {
+            // Search for the target item by iterating through the index
+            for (id, item) in &doc.index {
+                if id == target_id_str {
+                    if let Some(target_name) = &item.name {
+                        // Determine the item type for better anchor links
+                        let item_type = if let Some(inner) = &item.inner {
+                            if inner.function.is_some() {
+                                "function"
+                            } else if inner.struct_.is_some() {
+                                "struct"
+                            } else if inner.enum_.is_some() {
+                                "enum"
+                            } else if inner.trait_.is_some() {
+                                "trait"
+                            } else {
+                                "item"
+                            }
+                        } else {
+                            "item"
+                        };
+
+                        // Replace the link with a proper markdown link
+                        let replacement = format!(
+                            "[{}](#{}-{})",
+                            link_text,
+                            target_name.to_lowercase(),
+                            item_type
+                        );
+                        processed = processed.replace(link_text, &replacement);
+                    }
+                    break;
+                }
+            }
+        }
+
+        processed
     }
 
     fn print_trait_details(&self, doc: &RustDoc) {
