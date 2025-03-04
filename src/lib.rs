@@ -1155,7 +1155,7 @@ mod test {
         let index_json =
             full_json.get("index").and_then(Value::as_object).unwrap();
 
-        const START_IDX: usize = 2; // TODO(max): Fix the first two items
+        const START_IDX: usize = 0;
         const NUM_RESULTS: usize = 3;
 
         // Print a subset of items using RustDoc's index.
@@ -1165,10 +1165,12 @@ mod test {
             // Only include items from this crate
             .filter(|(id, _item)| id.starts_with("0:"))
             .skip(START_IDX)
-            .take(NUM_RESULTS);
-        for (id, item) in items_iter {
+            .take(NUM_RESULTS)
+            .enumerate();
+        for (i, (id, item)) in items_iter {
+            let idx = START_IDX + i;
             println!();
-            println!("======== ~ Item ~ ========");
+            println!("======== ~ Item {idx} ~ ========");
             println!("ID: {id}");
 
             println!("--- Markdown ---");
@@ -1184,7 +1186,7 @@ mod test {
                 println!("{item_json_pretty}");
             }
 
-            println!("======== End Item ========");
+            println!("======== End Item {idx} ========");
         }
     }
 
