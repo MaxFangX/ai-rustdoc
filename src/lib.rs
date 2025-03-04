@@ -254,6 +254,7 @@ struct TypeContent {
     slice: Option<SliceContent>,
     tuple: Option<Vec<ReturnType>>,
     resolved_path: Option<ResolvedPath>,
+    generic: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -294,10 +295,11 @@ enum ReturnType {
     ImplTrait {
         impl_trait: Vec<ImplTraitBound>,
     },
-    // --- Add this variant ---
     DynTrait {
         dyn_trait: Box<DynTrait>,
     },
+    // Special case for trait methods that return Self
+    Self_ {},
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1004,7 +1006,20 @@ impl RustDocItem {
 
                                         if let Some(ret) = &function.decl.output
                                         {
-                                            print!(" -> {ret}");
+                                            // Handle special case for trait
+                                            // methods returning Self
+                                            if let ReturnType::Generic {
+                                                generic,
+                                            } = ret
+                                            {
+                                                if generic == "Self" {
+                                                    print!(" -> Self");
+                                                } else {
+                                                    print!(" -> {ret}");
+                                                }
+                                            } else {
+                                                print!(" -> {ret}");
+                                            }
                                         }
 
                                         println!(";");
@@ -1207,11 +1222,15 @@ impl FunctionDecl {
     }
 }
 
+#[allow(dead_code)]
 impl GenericArg {
     fn format(&self) -> String {
         match self {
             Self::Type { type_inner } => {
-                if let Some(primitive) = &type_inner.primitive {
+                if let Some(generic) = &type_inner.generic {
+                    // Handle Self and other generic types
+                    generic.clone()
+                } else if let Some(primitive) = &type_inner.primitive {
                     primitive.clone()
                 } else if let Some(slice) = &type_inner.slice {
                     format!("[{}]", slice.primitive)
@@ -1394,6 +1413,7 @@ impl fmt::Display for ReturnType {
                     .join(" + ");
                 write!(f, "dyn {}", joined_traits)
             }
+            Self::Self_ {} => write!(f, "Self"),
         }
     }
 }
@@ -1405,7 +1425,42 @@ fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
             let formatted_args = angle_bracketed
                 .args
                 .iter()
-                .map(|arg| arg.format())
+                .map(|arg| match arg {
+                    GenericArg::Type { type_inner } => {
+                        if let Some(generic) = &type_inner.generic {
+                            // Handle Self and other generic types
+                            generic.clone()
+                        } else if let Some(primitive) = &type_inner.primitive {
+                            primitive.clone()
+                        } else if let Some(slice) = &type_inner.slice {
+                            format!("[{}]", slice.primitive)
+                        } else if let Some(tuple) = &type_inner.tuple {
+                            if tuple.is_empty() {
+                                "()".to_string()
+                            } else {
+                                format!(
+                                    "({})",
+                                    tuple
+                                        .iter()
+                                        .map(|t| t.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                )
+                            }
+                        } else if let Some(resolved_path) =
+                            &type_inner.resolved_path
+                        {
+                            let inner_args = format_angle_bracketed_args(
+                                resolved_path.args.as_ref(),
+                            );
+                            format!("{}{}", resolved_path.name, inner_args)
+                        } else {
+                            "/* unknown type */".to_string()
+                        }
+                    }
+                    GenericArg::Lifetime { lifetime } => lifetime.clone(),
+                    GenericArg::Const { const_ } => const_.expr.clone(),
+                })
                 .collect::<Vec<_>>();
             if formatted_args.is_empty() {
                 String::new()
@@ -1446,10 +1501,9 @@ mod test {
         let index_json =
             full_json.get("index").and_then(Value::as_object).unwrap();
 
+        // Print a subset of items using the below filters.
         const START_IDX: usize = 0;
         const NUM_RESULTS: usize = 3;
-
-        // Print a subset of items using RustDoc's index.
         let items_iter = rust_doc
             .index
             .iter()
