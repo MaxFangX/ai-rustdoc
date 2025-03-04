@@ -366,22 +366,19 @@ impl RustDoc {
 
             // Categorize based on inner type or default to "other"
             if let Some(inner) = &item.inner {
-                if inner.function.is_some() {
-                    functions.push((id, item));
-                } else if inner.enum_.is_some() {
-                    enums.push((id, item));
-                } else if self.is_trait(item) {
-                    traits.push((id, item));
-                } else if inner.impl_.is_some() && item.name.is_some() {
-                    // Only include impls that have names (trait implementations
-                    // for specific types)
-                    impls.push((id, item));
-                } else if self.is_struct(item) {
-                    structs.push((id, item));
-                } else if item.is_enum_variant() {
-                    enum_variants.push((id, item));
-                } else {
-                    others.push((id, item));
+                match inner {
+                    _ if inner.function.is_some() => functions.push((id, item)),
+                    _ if inner.enum_.is_some() => enums.push((id, item)),
+                    _ if self.is_trait(item) => traits.push((id, item)),
+                    _ if inner.impl_.is_some() && item.name.is_some() => {
+                        // Only include impls that have names (trait
+                        // implementations for specific types)
+                        impls.push((id, item));
+                    }
+                    _ if self.is_struct(item) => structs.push((id, item)),
+                    _ if item.is_enum_variant() =>
+                        enum_variants.push((id, item)),
+                    _ => others.push((id, item)),
                 }
             } else {
                 others.push((id, item));
@@ -453,11 +450,13 @@ impl RustDoc {
         if let Some(inner) = &item.inner {
             // Check if we can serialize the inner to JSON and find a trait
             // field
-            if let Ok(value) = serde_json::to_value(inner) {
-                if let Some(obj) = value.as_object() {
-                    return obj.contains_key("trait");
-                }
-            }
+            let Ok(value) = serde_json::to_value(inner) else {
+                return false;
+            };
+            let Some(obj) = value.as_object() else {
+                return false;
+            };
+            return obj.contains_key("trait");
         }
         false
     }
@@ -469,11 +468,13 @@ impl RustDoc {
         if let Some(inner) = &item.inner {
             // Check if we can serialize the inner to JSON and find a struct
             // field
-            if let Ok(value) = serde_json::to_value(inner) {
-                if let Some(obj) = value.as_object() {
-                    return obj.contains_key("struct");
-                }
-            }
+            let Ok(value) = serde_json::to_value(inner) else {
+                return false;
+            };
+            let Some(obj) = value.as_object() else {
+                return false;
+            };
+            return obj.contains_key("struct");
         }
         false
     }
@@ -483,11 +484,13 @@ impl RustDocItem {
     // Helper method to check if this item is an impl
     fn is_impl(&self) -> bool {
         if let Some(inner) = &self.inner {
-            if let Ok(inner_json) = serde_json::to_value(inner) {
-                if let Some(obj) = inner_json.as_object() {
-                    return obj.contains_key("impl");
-                }
-            }
+            let Ok(inner_json) = serde_json::to_value(inner) else {
+                return false;
+            };
+            let Some(obj) = inner_json.as_object() else {
+                return false;
+            };
+            return obj.contains_key("impl");
         }
         false
     }
@@ -629,45 +632,49 @@ impl RustDocItem {
                             else if let Some(kind_str) = kind_obj.get("kind")
                             {
                                 if let Some(kind) = kind_str.as_str() {
-                                    if kind == "plain" {
+                                    if kind == "plain"
+                                        && variant_inner.discriminant.is_some()
+                                    {
                                         // Show discriminant if available
-                                        if let Some(discriminant) =
-                                            &variant_inner.discriminant
+                                        let discriminant = variant_inner
+                                            .discriminant
+                                            .as_ref()
+                                            .unwrap();
+
+                                        // Try to extract expression from
+                                        // discriminant
+                                        if let Some(expr) =
+                                            discriminant.get("expr")
                                         {
-                                            if let Some(expr) =
-                                                discriminant.get("expr")
-                                            {
-                                                if let Some(expr_str) =
-                                                    expr.as_str()
-                                                {
-                                                    println!(
-                                                        "{} = {},",
-                                                        name, expr_str
-                                                    );
-                                                } else {
-                                                    println!("{},", name);
-                                                }
-                                            } else if let Some(disc_str) =
-                                                discriminant.as_str()
+                                            if let Some(expr_str) =
+                                                expr.as_str()
                                             {
                                                 println!(
                                                     "{} = {},",
-                                                    name, disc_str
+                                                    name, expr_str
                                                 );
-                                            } else {
-                                                println!("{},", name);
+                                                return;
                                             }
-                                        } else {
-                                            println!("{},", name);
                                         }
-                                    } else {
-                                        println!("{},", name);
+
+                                        // Fallback to direct string
+                                        // representation
+                                        if let Some(disc_str) =
+                                            discriminant.as_str()
+                                        {
+                                            println!(
+                                                "{} = {},",
+                                                name, disc_str
+                                            );
+                                            return;
+                                        }
                                     }
+
+                                    // Default case
+                                    println!("{},", name);
                                 } else {
                                     println!("{},", name);
                                 }
-                            } else {
-                                println!("{},", name);
                             }
                         } else {
                             println!("{},", name);
@@ -723,47 +730,35 @@ impl RustDocItem {
                         &struct_details.generics
                     {
                         let mut params = Vec::new();
+
                         for param in &generics.params {
-                            if let Ok(json_value) = serde_json::to_value(param)
+                            // Try to parse parameter information from JSON
+                            let Ok(json_value) = serde_json::to_value(param)
+                            else {
+                                continue;
+                            };
+                            let Some(obj) = json_value.as_object() else {
+                                continue;
+                            };
+                            let Some(kind) = obj.get("kind") else {
+                                continue;
+                            };
+                            let Some(kind_obj) = kind.as_object() else {
+                                continue;
+                            };
+                            let Some(name) = obj.get("name") else {
+                                continue;
+                            };
+                            let Some(name_str) = name.as_str() else {
+                                continue;
+                            };
+
+                            // Check if it's a lifetime parameter or type
+                            // parameter
+                            if kind_obj.get("lifetime").is_some()
+                                || kind_obj.get("type").is_some()
                             {
-                                if let Some(obj) = json_value.as_object() {
-                                    if let Some(kind) = obj.get("kind") {
-                                        if let Some(kind_obj) = kind.as_object()
-                                        {
-                                            if let Some(_lifetime) =
-                                                kind_obj.get("lifetime")
-                                            {
-                                                if let Some(name) =
-                                                    obj.get("name")
-                                                {
-                                                    if let Some(name_str) =
-                                                        name.as_str()
-                                                    {
-                                                        params.push(
-                                                            name_str
-                                                                .to_string(),
-                                                        );
-                                                    }
-                                                }
-                                            } else if let Some(_type_param) =
-                                                kind_obj.get("type")
-                                            {
-                                                if let Some(name) =
-                                                    obj.get("name")
-                                                {
-                                                    if let Some(name_str) =
-                                                        name.as_str()
-                                                    {
-                                                        params.push(
-                                                            name_str
-                                                                .to_string(),
-                                                        );
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                                params.push(name_str.to_string());
                             }
                         }
 
@@ -868,32 +863,25 @@ impl RustDocItem {
                                                     // Extract lifetime from
                                                     // generics_str (e.g. "<'a>"
                                                     // -> "'a")
-                                                    let lifetime = if let Some(
-                                                        start,
-                                                    ) =
-                                                        generics_str.find("<'")
-                                                    {
-                                                        if let Some(end) =
-                                                            generics_str
-                                                                [start + 1..]
-                                                                .find(">")
+                                                    let lifetime =
+                                                        match generics_str
+                                                            .find("<'")
                                                         {
-                                                            let lifetime_part = &generics_str[start+1..start+1+end];
-                                                            if lifetime_part
-                                                                .contains(",")
-                                                            {
-                                                                "'a" // Default if multiple params
-                                                            } else {
-                                                                lifetime_part
+                                                            Some(start) => {
+                                                                match generics_str[start + 1..].find(">") {
+                                                                Some(end) => {
+                                                                    let lifetime_part = &generics_str[start+1..start+1+end];
+                                                                    if lifetime_part.contains(",") {
+                                                                        "'a" // Default if multiple params
+                                                                    } else {
+                                                                        lifetime_part
+                                                                    }
+                                                                },
+                                                                None => "'a" // Default if cannot parse
                                                             }
-                                                        } else {
-                                                            "'a" // Default if
-                                                                 // cannot parse
-                                                        }
-                                                    } else {
-                                                        "'a" // Default if
-                                                             // cannot parse
-                                                    };
+                                                            }
+                                                            None => "'a", /* Default if cannot parse */
+                                                        };
 
                                                     // Special case for byte
                                                     // slices with lifetime
@@ -907,17 +895,13 @@ impl RustDocItem {
                                             } else if let Some(field_obj) =
                                                 field_value.as_object()
                                             {
-                                                if let Some(type_name) =
-                                                    field_obj
-                                                        .get("name")
-                                                        .and_then(|v| {
-                                                            v.as_str()
-                                                        })
-                                                {
-                                                    print!("{}", type_name);
-                                                } else {
-                                                    print!("/* field type */");
-                                                }
+                                                let type_name = field_obj
+                                                    .get("name")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or(
+                                                        "/* field type */",
+                                                    );
+                                                print!("{}", type_name);
                                             } else {
                                                 print!("/* field type */");
                                             }
@@ -989,11 +973,13 @@ impl RustDocItem {
     // Helper method to check if this item is an enum variant
     fn is_enum_variant(&self) -> bool {
         if let Some(inner) = &self.inner {
-            if let Ok(inner_json) = serde_json::to_value(inner) {
-                if let Some(obj) = inner_json.as_object() {
-                    return obj.contains_key("variant");
-                }
-            }
+            let Ok(inner_json) = serde_json::to_value(inner) else {
+                return false;
+            };
+            let Some(obj) = inner_json.as_object() else {
+                return false;
+            };
+            return obj.contains_key("variant");
         }
         false
     }
