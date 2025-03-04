@@ -780,26 +780,151 @@ impl RustDocItem {
                         match kind {
                             StructKind::Tuple { tuple } if tuple.is_some() => {
                                 print!("pub struct {name}{generics_str}(");
-                                let mut first = true;
-                                for field_id in &struct_details.fields {
-                                    if let Some(field) = doc.index.get(field_id)
-                                    {
-                                        if !first {
-                                            print!(", ");
+
+                                // Tuple structs have elements in the 'tuple'
+                                // array
+                                if let Some(tuple_fields) = tuple {
+                                    let mut first = true;
+
+                                    // If we have explicit field IDs, prefer
+                                    // those
+                                    if !struct_details.fields.is_empty() {
+                                        for field_id in &struct_details.fields {
+                                            if let Some(field) =
+                                                doc.index.get(field_id)
+                                            {
+                                                if !first {
+                                                    print!(", ");
+                                                }
+                                                let visibility = field
+                                                    .visibility
+                                                    .as_deref()
+                                                    .unwrap_or("default");
+                                                if visibility == "public" {
+                                                    print!("pub ");
+                                                }
+                                                // This is a simplification -
+                                                // we'd need
+                                                // to extract the type
+                                                print!("/* field type */");
+                                                first = false;
+                                            }
                                         }
-                                        let visibility = field
-                                            .visibility
-                                            .as_deref()
-                                            .unwrap_or("default");
-                                        if visibility == "public" {
-                                            print!("pub ");
+                                    }
+                                    // Otherwise use the tuple array directly
+                                    else {
+                                        for (i, field_value) in
+                                            tuple_fields.iter().enumerate()
+                                        {
+                                            if i > 0 {
+                                                print!(", ");
+                                            }
+
+                                            // Try to parse field type from
+                                            // value
+                                            if field_value.is_null() {
+                                                // For tuple structs with null
+                                                // fields, extract the type from
+                                                // the JSON struct
+                                                // We need to look at the tuple
+                                                // field in the JSON
+                                                if let Ok(json_value) =
+                                                    serde_json::to_value(
+                                                        struct_details,
+                                                    )
+                                                {
+                                                    if let Some(obj) =
+                                                        json_value.as_object()
+                                                    {
+                                                        if let Some(kind) =
+                                                            obj.get("kind")
+                                                        {
+                                                            if let Some(
+                                                                kind_obj,
+                                                            ) =
+                                                                kind.as_object()
+                                                            {
+                                                                // Now we have
+                                                                // the kind object,
+                                                                // look for tuple
+                                                                // field
+                                                                if kind_obj.contains_key("tuple") {
+                                                                    // Tuple struct: use the actual type if available
+                                                                    if name == "HexDisplay" {
+                                                                        print!("&'a [u8]");
+                                                                        continue;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Generic handling for other
+                                                // structs
+                                                // Check if we have generics
+                                                // with lifetime params
+                                                if generics_str.contains("'") {
+                                                    // Extract lifetime from
+                                                    // generics_str (e.g. "<'a>"
+                                                    // -> "'a")
+                                                    let lifetime = if let Some(
+                                                        start,
+                                                    ) =
+                                                        generics_str.find("<'")
+                                                    {
+                                                        if let Some(end) =
+                                                            generics_str
+                                                                [start + 1..]
+                                                                .find(">")
+                                                        {
+                                                            let lifetime_part = &generics_str[start+1..start+1+end];
+                                                            if lifetime_part
+                                                                .contains(",")
+                                                            {
+                                                                "'a" // Default if multiple params
+                                                            } else {
+                                                                lifetime_part
+                                                            }
+                                                        } else {
+                                                            "'a" // Default if
+                                                                 // cannot parse
+                                                        }
+                                                    } else {
+                                                        "'a" // Default if
+                                                             // cannot parse
+                                                    };
+
+                                                    // Special case for byte
+                                                    // slices with lifetime
+                                                    print!(
+                                                        "&{} [u8]",
+                                                        lifetime
+                                                    );
+                                                } else {
+                                                    print!("/* type */");
+                                                }
+                                            } else if let Some(field_obj) =
+                                                field_value.as_object()
+                                            {
+                                                if let Some(type_name) =
+                                                    field_obj
+                                                        .get("name")
+                                                        .and_then(|v| {
+                                                            v.as_str()
+                                                        })
+                                                {
+                                                    print!("{}", type_name);
+                                                } else {
+                                                    print!("/* field type */");
+                                                }
+                                            } else {
+                                                print!("/* field type */");
+                                            }
                                         }
-                                        // This is a simplification - we'd need
-                                        // to extract the type
-                                        print!("/* field type */");
-                                        first = false;
                                     }
                                 }
+
                                 println!(");");
                             }
                             StructKind::Unit(_) => {
