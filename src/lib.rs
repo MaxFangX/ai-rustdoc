@@ -1414,6 +1414,8 @@ fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
 
 #[cfg(test)]
 mod test {
+    use std::env;
+
     use serde_json::Value;
 
     use super::*;
@@ -1437,9 +1439,12 @@ mod test {
         let index_json =
             full_json.get("index").and_then(Value::as_object).unwrap();
 
+        let markdown_only =
+            matches!(env::var("MARKDOWN_ONLY").as_deref(), Ok("true"));
+
         // Print a subset of items using the below filters.
         const START_IDX: usize = 0;
-        const NUM_RESULTS: usize = 3;
+        const NUM_RESULTS: usize = 15;
         let items_iter = rust_doc
             .index
             .iter()
@@ -1451,23 +1456,27 @@ mod test {
         for (i, (id, item)) in items_iter {
             let idx = START_IDX + i;
             println!();
-            println!("======== ~ Item {idx} ~ ========");
-            println!("ID: {id}");
+            println!("┏━━━━━━━━━ Item {idx} ━━━━━━━━━━");
 
-            println!("--- Markdown ---");
+            if !markdown_only {
+                println!("ID: {id}");
+                println!("--- Markdown ---");
+            }
             item.print(&rust_doc);
 
-            println!("--- Debug ---");
-            println!("{item:#?}");
+            if !markdown_only {
+                println!("--- Debug ---");
+                println!("{item:#?}");
 
-            if let Some(item_json) = index_json.get(id) {
-                println!("--- Raw JSON ---");
-                let item_json_pretty =
-                    serde_json::to_string_pretty(item_json).unwrap();
-                println!("{item_json_pretty}");
+                if let Some(item_json) = index_json.get(id) {
+                    println!("--- Raw JSON ---");
+                    let item_json_pretty =
+                        serde_json::to_string_pretty(item_json).unwrap();
+                    println!("{item_json_pretty}");
+                }
             }
 
-            println!("======== End Item {idx} ========");
+            println!("┗━━━━━━━ End Item {idx} ━━━━━━━━");
         }
     }
 
