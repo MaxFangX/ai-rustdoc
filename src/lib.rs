@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt};
+use std::{collections::BTreeMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ pub struct RustDoc {
     crate_version: String,
     #[allow(dead_code)]
     includes_private: bool,
-    index: HashMap<String, RustDocItem>,
+    index: BTreeMap<String, RustDocItem>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1443,8 +1443,8 @@ mod test {
             matches!(env::var("MARKDOWN_ONLY").as_deref(), Ok("true"));
 
         // Print a subset of items using the below filters.
-        const START_IDX: usize = 0;
-        const NUM_RESULTS: usize = 15;
+        const START_IDX: usize = 15;
+        const NUM_RESULTS: usize = 1;
         let items_iter = rust_doc
             .index
             .iter()
