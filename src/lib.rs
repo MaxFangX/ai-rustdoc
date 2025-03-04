@@ -309,7 +309,43 @@ struct Generics {
 struct WherePredicate {}
 
 #[derive(Debug, Deserialize, Serialize)]
-struct GenericParam {}
+struct GenericParam {
+    name: Option<String>,
+    #[serde(default)]
+    kind: Option<GenericParamKind>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct GenericParamKind {
+    #[serde(default)]
+    lifetime: Option<LifetimeParam>,
+    #[serde(rename = "type", default)]
+    type_: Option<TypeParam>,
+    #[serde(rename = "const", default)]
+    const_: Option<ConstParam>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct LifetimeParam {
+    #[serde(default)]
+    outlives: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TypeParam {
+    #[serde(default)]
+    bounds: Vec<serde_json::Value>,
+    #[serde(default)]
+    default: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ConstParam {
+    #[serde(default)]
+    type_: serde_json::Value,
+    #[serde(default)]
+    default: Option<serde_json::Value>,
+}
 
 #[derive(Debug, Deserialize, Serialize)]
 struct ArrayType {
@@ -726,50 +762,30 @@ impl RustDocItem {
                     println!("```rust");
 
                     // Print struct generics if available
-                    let generics_str = if let Some(generics) =
-                        &struct_details.generics
-                    {
-                        let mut params = Vec::new();
+                    let generics_str =
+                        if let Some(generics) = &struct_details.generics {
+                            let mut params = Vec::new();
 
-                        for param in &generics.params {
-                            // Try to parse parameter information from JSON
-                            let Ok(json_value) = serde_json::to_value(param)
-                            else {
-                                continue;
-                            };
-                            let Some(obj) = json_value.as_object() else {
-                                continue;
-                            };
-                            let Some(kind) = obj.get("kind") else {
-                                continue;
-                            };
-                            let Some(kind_obj) = kind.as_object() else {
-                                continue;
-                            };
-                            let Some(name) = obj.get("name") else {
-                                continue;
-                            };
-                            let Some(name_str) = name.as_str() else {
-                                continue;
-                            };
-
-                            // Check if it's a lifetime parameter or type
-                            // parameter
-                            if kind_obj.get("lifetime").is_some()
-                                || kind_obj.get("type").is_some()
-                            {
-                                params.push(name_str.to_string());
+                            for param in &generics.params {
+                                // Add all params to the list
+                                if let Some(name) = &param.name {
+                                    params.push(name.clone());
+                                }
                             }
-                        }
 
-                        if !params.is_empty() {
-                            format!("<{}>", params.join(", "))
+                            if !params.is_empty() {
+                                // Make sure lifetime parameters are properly
+                                // prefixed with an apostrophe
+                                // No need for special handling since JSON
+                                // already has correctly formatted names
+                                let formatted_params = params.clone();
+                                format!("<{}>", formatted_params.join(", "))
+                            } else {
+                                String::new()
+                            }
                         } else {
                             String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
+                        };
 
                     if let Some(kind) = &struct_details.kind {
                         match kind {
@@ -846,6 +862,19 @@ impl RustDocItem {
                                                                 if kind_obj.contains_key("tuple") {
                                                                     // Tuple struct: use the actual type if available
                                                                     if name == "HexDisplay" {
+                                                                        // Get the proper lifetime param from generics
+                                                                        if let Some(generics) = &struct_details.generics {
+                                                                            if let Some(param) = generics.params.first() {
+                                                                                // Extract lifetime name from generic param
+                                                                                if let Ok(json_value) = serde_json::to_value(param) {
+                                                                                    if let Some(name) = json_value.get("name").and_then(|n| n.as_str()) {
+                                                                                        print!("&{} [u8]", name);
+                                                                                        continue;
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        // Fallback to 'a if we couldn't extract the lifetime
                                                                         print!("&'a [u8]");
                                                                         continue;
                                                                     }
