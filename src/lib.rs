@@ -698,6 +698,7 @@ mod test {
     /// ```
     #[test]
     #[ignore]
+    #[allow(clippy::iter_skip_zero)] // We want a configurable const
     fn print_hex_docs() {
         // Parse into RustDoc struct first
         let rust_doc = serde_json::from_str::<RustDoc>(HEX_JSON_STR).unwrap();
@@ -707,28 +708,36 @@ mod test {
         let index_json =
             full_json.get("index").and_then(Value::as_object).unwrap();
 
-        // Print all items from this crate using RustDoc's index
-        for (id, item) in &rust_doc.index {
-            if id.starts_with("0:") {
-                println!();
-                println!("======== ~ Item ~ ========");
-                println!("ID: {id}");
+        const START_IDX: usize = 2; // TODO(max): Fix the first two items
+        const NUM_RESULTS: usize = 3;
 
-                println!("--- Markdown ---");
-                item.print(&rust_doc);
+        // Print a subset of items using RustDoc's index.
+        let items_iter = rust_doc
+            .index
+            .iter()
+            // Only include items from this crate
+            .filter(|(id, _item)| id.starts_with("0:"))
+            .skip(START_IDX)
+            .take(NUM_RESULTS);
+        for (id, item) in items_iter {
+            println!();
+            println!("======== ~ Item ~ ========");
+            println!("ID: {id}");
 
-                println!("--- Debug ---");
-                println!("{item:#?}");
+            println!("--- Markdown ---");
+            item.print(&rust_doc);
 
-                if let Some(item_json) = index_json.get(id) {
-                    println!("--- Raw JSON ---");
-                    let item_json_pretty =
-                        serde_json::to_string_pretty(item_json).unwrap();
-                    println!("{item_json_pretty}");
-                }
+            println!("--- Debug ---");
+            println!("{item:#?}");
 
-                println!("======== End Item ========");
+            if let Some(item_json) = index_json.get(id) {
+                println!("--- Raw JSON ---");
+                let item_json_pretty =
+                    serde_json::to_string_pretty(item_json).unwrap();
+                println!("{item_json_pretty}");
             }
+
+            println!("======== End Item ========");
         }
     }
 
