@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct RustDoc {
     root: String,
     crate_version: String,
+    #[allow(dead_code)]
     includes_private: bool,
     index: HashMap<String, RustDocItem>,
 }
@@ -41,6 +42,10 @@ struct ItemInner {
     enum_: Option<EnumDetails>,
     #[serde(rename = "impl")]
     impl_: Option<Impl>,
+    #[serde(rename = "struct")]
+    struct_: Option<StructDetails>,
+    #[serde(rename = "trait")]
+    trait_: Option<TraitInfo>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -336,30 +341,140 @@ struct QualifiedPath {
 
 impl RustDoc {
     pub fn print(&self) {
-        println!("Crate Documentation");
-        println!("==================");
-        println!();
-        println!("Root: {}", self.root);
-        println!("Version: {}", self.crate_version);
-        println!("Includes private items: {}", self.includes_private);
-        println!();
-        println!("Items");
-        println!("-----");
+        // Get crate name from the root path
+        let crate_name = self.root.split('/').last().unwrap_or(&self.root);
+
+        println!("# {} v{}", crate_name, self.crate_version);
         println!();
 
+        // Group items by type
+        let mut functions = Vec::new();
+        let mut structs = Vec::new();
+        let mut enums = Vec::new();
+        let mut traits = Vec::new();
+        let mut impls = Vec::new();
+        let mut others = Vec::new();
+
         for (id, item) in &self.index {
-            // Only print items from this crate (those starting with "0:")
-            if id.starts_with("0:") {
+            // Only process items from this crate (those starting with "0:")
+            if !id.starts_with("0:") {
+                continue;
+            }
+
+            // Skip items without names
+            if item.name.is_none() {
+                continue;
+            }
+
+            // Categorize based on inner type or default to "other"
+            if let Some(inner) = &item.inner {
+                if inner.function.is_some() {
+                    functions.push((id, item));
+                } else if inner.enum_.is_some() {
+                    enums.push((id, item));
+                } else if self.is_trait(item) {
+                    traits.push((id, item));
+                } else if inner.impl_.is_some() {
+                    impls.push((id, item));
+                } else if self.is_struct(item) {
+                    structs.push((id, item));
+                } else {
+                    others.push((id, item));
+                }
+            } else {
+                others.push((id, item));
+            }
+        }
+
+        // Print items by category with section headings
+        if !functions.is_empty() {
+            println!("## Functions");
+            println!();
+            for (_, item) in functions {
                 item.print(self);
             }
         }
+
+        if !structs.is_empty() {
+            println!("## Structs");
+            println!();
+            for (_, item) in structs {
+                item.print(self);
+            }
+        }
+
+        if !enums.is_empty() {
+            println!("## Enums");
+            println!();
+            for (_, item) in enums {
+                item.print(self);
+            }
+        }
+
+        if !traits.is_empty() {
+            println!("## Traits");
+            println!();
+            for (_, item) in traits {
+                item.print(self);
+            }
+        }
+
+        if !impls.is_empty() {
+            println!("## Implementations");
+            println!();
+            for (_, item) in impls {
+                item.print(self);
+            }
+        }
+
+        if !others.is_empty() {
+            println!("## Other Items");
+            println!();
+            for (_, item) in others {
+                item.print(self);
+            }
+        }
+    }
+
+    fn is_trait(&self, item: &RustDocItem) -> bool {
+        // Check if an item is a trait definition
+        // This is a simplification - we would need to check trait-specific
+        // properties
+        if let Some(inner) = &item.inner {
+            // Check if we can serialize the inner to JSON and find a trait
+            // field
+            if let Ok(value) = serde_json::to_value(inner) {
+                if let Some(obj) = value.as_object() {
+                    return obj.contains_key("trait");
+                }
+            }
+        }
+        false
+    }
+
+    fn is_struct(&self, item: &RustDocItem) -> bool {
+        // Check if an item is a struct definition
+        // This is a simplification - we would need to check struct-specific
+        // properties
+        if let Some(inner) = &item.inner {
+            // Check if we can serialize the inner to JSON and find a struct
+            // field
+            if let Ok(value) = serde_json::to_value(inner) {
+                if let Some(obj) = value.as_object() {
+                    return obj.contains_key("struct");
+                }
+            }
+        }
+        false
     }
 }
 
 impl RustDocItem {
     fn print(&self, doc: &RustDoc) {
         if let Some(name) = &self.name {
-            let Some(docs) = &self.docs else { return };
+            // Allow items without docs for trait impls
+            let empty_string = String::new();
+            let docs_content = self.docs.as_ref().unwrap_or(&empty_string);
 
             // TODO(max): For now, we print everything, but we will eventually
             // want to restrict to public items only. Leave this to reuse later:
@@ -367,10 +482,20 @@ impl RustDocItem {
             //     return;
             // }
 
-            println!("`{name}`:");
+            // Print header with appropriate markdown heading level
+            let visibility = self.visibility.as_deref().unwrap_or("default");
+            println!(
+                "### {}{}",
+                if visibility == "public" { "pub " } else { "" },
+                name
+            );
             println!();
-            println!("{docs}");
-            println!();
+
+            // Print documentation if available
+            if !docs_content.is_empty() {
+                println!("{docs_content}");
+                println!();
+            }
 
             if let Some(inner) = &self.inner {
                 // Collect all implemented traits
@@ -408,11 +533,13 @@ impl RustDocItem {
                 traits.sort();
                 traits.dedup();
 
+                // Print function signature for functions
                 if let Some(f) = &inner.function {
                     f.decl.print(name);
                     println!();
                 }
 
+                // Print enum definitions with more detailed formatting
                 if let Some(enum_details) = &inner.enum_ {
                     println!("```rust");
                     println!("pub enum {name} {{");
@@ -431,19 +558,339 @@ impl RustDocItem {
                     println!();
                 }
 
-                // Print traits if we found any
+                // Print struct definitions with fields
+                if let Some(struct_details) = &inner.struct_ {
+                    println!("```rust");
+                    if let Some(kind) = &struct_details.kind {
+                        match kind {
+                            StructKind::Tuple { tuple } if tuple.is_some() => {
+                                print!("pub struct {name}(");
+                                let mut first = true;
+                                for field_id in &struct_details.fields {
+                                    if let Some(field) = doc.index.get(field_id)
+                                    {
+                                        if !first {
+                                            print!(", ");
+                                        }
+                                        let visibility = field
+                                            .visibility
+                                            .as_deref()
+                                            .unwrap_or("default");
+                                        if visibility == "public" {
+                                            print!("pub ");
+                                        }
+                                        // This is a simplification - we'd need
+                                        // to
+                                        // extract the type
+                                        print!("/* field type */");
+                                        first = false;
+                                    }
+                                }
+                                println!(");");
+                            }
+                            StructKind::Unit(_) => {
+                                println!("pub struct {name};");
+                            }
+                            _ => {
+                                println!("pub struct {name}(); // Unknown struct kind");
+                            }
+                        }
+                    } else {
+                        println!("pub struct {name} {{");
+                        for field_id in &struct_details.fields {
+                            if let Some(field) = doc.index.get(field_id) {
+                                if let Some(docs) = &field.docs {
+                                    println!("    /// {docs}");
+                                }
+                                if let Some(field_name) = &field.name {
+                                    let visibility = field
+                                        .visibility
+                                        .as_deref()
+                                        .unwrap_or("default");
+                                    print!("    ");
+                                    if visibility == "public" {
+                                        print!("pub ");
+                                    }
+                                    // This is a simplification - we'd need to
+                                    // extract the type
+                                    println!("{field_name}: /* field type */,");
+                                }
+                            }
+                        }
+                        println!("}}");
+                    }
+                    println!("```");
+                    println!();
+                }
+
+                // Handle trait definition
+                self.print_trait_details(doc);
+
+                // Print trait implementations if we found any
                 if !traits.is_empty() {
                     println!("**Implements:**");
                     for trait_ in traits {
-                        println!("- {}", trait_);
+                        println!("- `{}`", trait_);
                     }
                     println!();
                 }
+
+                // Print implementation details for trait impls
+                self.print_impl_details(doc);
             }
 
             println!();
         }
     }
+
+    fn print_trait_details(&self, doc: &RustDoc) {
+        if let Some(inner) = &self.inner {
+            if let Some(name) = &self.name {
+                // First check if this is a trait definition using ItemInner's
+                // trait_ field
+                if let Some(trait_info) = &inner.trait_ {
+                    // Print trait signature with bounds
+                    println!("```rust");
+                    let safety =
+                        if trait_info.is_unsafe { "unsafe " } else { "" };
+
+                    print!("pub {safety}trait {name}");
+
+                    // Print generic params if any
+                    if let Some(generics) = &trait_info.generics {
+                        if !generics.params.is_empty() {
+                            print!("<...>"); // Simplified for now
+                        }
+                    }
+
+                    // Print trait bounds if any
+                    if !trait_info.bounds.is_empty() {
+                        print!(": ");
+                        let mut first = true;
+                        for bound in &trait_info.bounds {
+                            if !first {
+                                print!(" + ");
+                            }
+                            if let Some(trait_bound) = &bound.trait_bound {
+                                print!("{}", trait_bound.trait_.name);
+                            } else if let Some(outlives) = &bound.outlives {
+                                print!("{}", outlives);
+                            }
+                            first = false;
+                        }
+                    }
+
+                    println!(" {{");
+
+                    // Print required methods
+                    for method_id in &trait_info.items {
+                        if let Some(method_item) = doc.index.get(method_id) {
+                            if let Some(method_name) = &method_item.name {
+                                // Print method documentation as a doc comment
+                                if let Some(method_docs) = &method_item.docs {
+                                    for line in method_docs.lines() {
+                                        println!("    /// {line}");
+                                    }
+                                }
+
+                                // Print method signature
+                                if let Some(inner) = &method_item.inner {
+                                    if let Some(function) = &inner.function {
+                                        print!("    fn {method_name}(");
+
+                                        let mut first = true;
+                                        for (param_name, param) in
+                                            &function.decl.inputs
+                                        {
+                                            if !first {
+                                                print!(", ");
+                                            }
+                                            print!("{param_name}: {param}");
+                                            first = false;
+                                        }
+
+                                        print!(")");
+
+                                        if let Some(ret) = &function.decl.output
+                                        {
+                                            print!(" -> {ret}");
+                                        }
+
+                                        println!(";");
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    println!("}}");
+                    println!("```");
+                    println!();
+
+                    println!("**Methods:**");
+                    println!();
+                    // Then print each method with full details
+                    for method_id in &trait_info.items {
+                        if let Some(method_item) = doc.index.get(method_id) {
+                            if let Some(method_name) = &method_item.name {
+                                println!("#### `{}::{}`", name, method_name);
+                                if let Some(method_docs) = &method_item.docs {
+                                    println!();
+                                    println!("{method_docs}");
+                                    println!();
+                                }
+
+                                // Print method signature
+                                if let Some(inner) = &method_item.inner {
+                                    if let Some(function) = &inner.function {
+                                        function.decl.print(method_name);
+                                        println!();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Fallback to the older approach if needed
+                else if let Some(trait_details) = self.get_trait_details() {
+                    if let Some(items) = &trait_details.items {
+                        println!("**Trait Methods:**");
+                        println!();
+                        for method_id in items {
+                            if let Some(method_item) = doc.index.get(method_id)
+                            {
+                                if let Some(method_name) = &method_item.name {
+                                    println!(
+                                        "#### `{}::{}`",
+                                        name, method_name
+                                    );
+                                    if let Some(method_docs) = &method_item.docs
+                                    {
+                                        println!();
+                                        println!("{method_docs}");
+                                        println!();
+                                    }
+
+                                    // Print method signature
+                                    if let Some(inner) = &method_item.inner {
+                                        if let Some(function) = &inner.function
+                                        {
+                                            function.decl.print(method_name);
+                                            println!();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn print_impl_details(&self, doc: &RustDoc) {
+        if let Some(inner) = &self.inner {
+            if let Some(impl_) = &inner.impl_ {
+                // Only print details if this is a trait implementation
+                if let Some(trait_) = &impl_.trait_ {
+                    if let Some(for_type) = &impl_.for_ {
+                        let trait_name = &trait_.name;
+                        let for_type_name = match for_type {
+                            Parameter::ResolvedPath { resolved_path } =>
+                                resolved_path.name.clone(),
+                            _ => "Unknown".to_string(),
+                        };
+
+                        println!("**Implementation of `{trait_name}` for `{for_type_name}`:**");
+                        println!();
+
+                        // Print implementation methods
+                        for method_id in &impl_.items {
+                            if let Some(method_item) = doc.index.get(method_id)
+                            {
+                                if let Some(method_name) = &method_item.name {
+                                    println!("#### `{method_name}`");
+                                    if let Some(method_docs) = &method_item.docs
+                                    {
+                                        println!();
+                                        println!("{method_docs}");
+                                        println!();
+                                    }
+
+                                    // Print method signature
+                                    if let Some(inner) = &method_item.inner {
+                                        if let Some(function) = &inner.function
+                                        {
+                                            function.decl.print(method_name);
+                                            println!();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_trait_details(&self) -> Option<TraitDetails> {
+        // We need to manually check for trait in the raw JSON structure
+        // This is a simplification - in reality we might need to parse more
+        // from the JSON
+        serde_json::from_value::<TraitDetails>(serde_json::json!(
+            self.inner.as_ref()?.impl_.as_ref()?.trait_
+        ))
+        .ok()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StructDetails {
+    #[serde(default)]
+    fields: Vec<String>,
+    #[serde(default)]
+    impls: Vec<String>,
+    #[serde(default)]
+    generics: Option<Generics>,
+    #[serde(default)]
+    kind: Option<StructKind>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum StructKind {
+    Tuple {
+        tuple: Option<Vec<serde_json::Value>>,
+    },
+    Unit(String),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TraitInfo {
+    bounds: Vec<TraitBoundInfo>,
+    generics: Option<Generics>,
+    implementations: Vec<String>,
+    #[serde(default)]
+    is_auto: bool,
+    #[serde(default)]
+    is_unsafe: bool,
+    #[serde(default)]
+    items: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TraitBoundInfo {
+    #[serde(default)]
+    trait_bound: Option<TraitBound>,
+    #[serde(default)]
+    outlives: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TraitDetails {
+    items: Option<Vec<String>>,
+    // Add other trait fields as needed
 }
 
 impl FunctionDecl {
@@ -743,26 +1190,8 @@ mod test {
 
     /// This test is designed for quickly debugging parsing errors.
     ///
-    /// # Workflow
-    ///
     /// ```bash
     /// $ just iterate cargo test test_parse_individual
-    /// ```
-    ///
-    /// Query an advanced GPT with something like:
-    ///
-    /// ```
-    /// I'm working on a crate which parse rustdoc outputs. There's one item
-    /// it's getting stuck on, caught in the tests. There may be a bug
-    /// somewhere. Here's the code and test output which I think should contain
-    /// enough info for you to be able to diagnose the issue. Can you help? If
-    /// you spot any fixes, please indicate which sections should be modified
-    /// along with the exact code that it should be modified to. Don't forget to
-    /// update the `Display` implementations if a new enum variant was added.
-    ///
-    /// <code>
-    ///
-    /// <failed test output>
     /// ```
     #[test]
     fn test_parse_individual() {
