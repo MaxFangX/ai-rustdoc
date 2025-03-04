@@ -58,17 +58,8 @@ struct Impl {
     for_: Option<Parameter>,
     items: Vec<String>,
     is_unsafe: bool,
-    negative: bool,
-    synthetic: bool,
     blanket_impl: Option<BlanketImpl>,
     generics: Option<Generics>,
-    provided_trait_methods: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ImplFor {
-    #[serde(rename = "resolved_path")]
-    resolved_path: ResolvedPath,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -86,16 +77,9 @@ struct BlanketImpl {
 #[derive(Debug, Deserialize, Serialize)]
 struct EnumDetails {
     variants: Vec<String>,
-    variants_stripped: bool,
     impls: Vec<String>,
     #[serde(default)]
     generics: Option<Generics>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct EnumVariant {
-    name: String,
-    docs: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -213,7 +197,6 @@ struct TypeBinding {
 #[serde(untagged)]
 enum BindingKind {
     Equality { equality: EqualityConstraint },
-    // Possibly other variants if needed, e.g. `Constraint { ... }`
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1176,9 +1159,6 @@ enum StructKind {
 struct TraitInfo {
     bounds: Vec<TraitBoundInfo>,
     generics: Option<Generics>,
-    implementations: Vec<String>,
-    #[serde(default)]
-    is_auto: bool,
     #[serde(default)]
     is_unsafe: bool,
     #[serde(default)]
@@ -1219,50 +1199,6 @@ impl FunctionDecl {
         }
 
         println!(";\n```");
-    }
-}
-
-#[allow(dead_code)]
-impl GenericArg {
-    fn format(&self) -> String {
-        match self {
-            Self::Type { type_inner } => {
-                if let Some(generic) = &type_inner.generic {
-                    // Handle Self and other generic types
-                    generic.clone()
-                } else if let Some(primitive) = &type_inner.primitive {
-                    primitive.clone()
-                } else if let Some(slice) = &type_inner.slice {
-                    format!("[{}]", slice.primitive)
-                } else if let Some(tuple) = &type_inner.tuple {
-                    if tuple.is_empty() {
-                        "()".to_string()
-                    } else {
-                        format!(
-                            "({})",
-                            tuple
-                                .iter()
-                                .map(|t| t.to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )
-                    }
-                } else if let Some(resolved_path) = &type_inner.resolved_path {
-                    let args = format_angle_bracketed_args(
-                        resolved_path.args.as_ref(),
-                    );
-                    format!("{}{args}", resolved_path.name)
-                } else {
-                    "/* unknown type */".to_string()
-                }
-            }
-            Self::Lifetime { lifetime } => lifetime.clone(),
-            Self::Const { const_ } => {
-                // For now, we could just return the expr,
-                // or do something fancier if you like
-                const_.expr.clone()
-            }
-        }
     }
 }
 
