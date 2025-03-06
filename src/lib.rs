@@ -1456,33 +1456,6 @@ impl RustDocItem {
         println!("}}");
         println!("```");
         println!();
-
-        // Print detailed documentation for each method
-        println!("**Methods:**");
-        println!();
-        for method_id in &impl_.items {
-            let Some(method_item) = doc.index.get(method_id) else {
-                continue;
-            };
-            let Some(method_name) = &method_item.name else {
-                continue;
-            };
-
-            println!("#### `{method_name}`");
-            if let Some(method_docs) = &method_item.docs {
-                println!();
-                println!("{method_docs}");
-                println!();
-            }
-
-            // Print method signature
-            if let Some(inner) = &method_item.inner {
-                if let Some(function) = &inner.function {
-                    function.decl.print(method_name);
-                    println!();
-                }
-            }
-        }
     }
 
     fn get_trait_details(&self) -> Option<TraitDetails> {
