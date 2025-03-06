@@ -1560,9 +1560,35 @@ mod test {
         let markdown_only =
             matches!(env::var("MARKDOWN_ONLY").as_deref(), Ok("true"));
 
+        // Summary of the test data we're currently iterating on.
+        // Update these as we look at more items.
+        //
+        // - Item 0: Module `hex` (crate root)
+        // - Item 1: `fmt` method (related to some implementation)
+        // - Item 2: Function `encode`
+        // - Item 3: Function `decode`
+        // - Item 4: Function `decode_const`
+        // - Item 5: Function `decode_to_slice`
+        // - Item 6: Function `display`
+        // - Item 7: Trait `FromHex` definition
+        // - Item 8: Method `from_hex` (trait method signature for FromHex)
+        // - Item 9: `impl FromHex for Vec<u8>`
+        // - Item 10: Method `from_hex` implementation for Vec<u8>
+        // - Item 11: `impl FromHex for std::borrow::Cow<'_, [u8]>`
+        // - Item 12: Method `from_hex` implementation for Cow<'_, [u8]>
+        // - Item 13: `impl FromHex for [u8; N]`
+        // - Item 14: Method `from_hex` implementation for [u8; N]
+        // - Item 15: Struct `HexDisplay<'a>`
+        // - Item 16: `impl Display for HexDisplay<'a>`
+        // - Item 17: Method `fmt` (implementation for Display trait)
+        // - Item 18: `impl Debug for HexDisplay<'a>`
+        // - Item 19: Method `fmt` implementation for Debug on HexDisplay<'a>
+        // - Item 20: Enum `DecodeError`
+        // - ... (TODO)
+
         // Print a subset of items using the below filters.
-        const START_ITEM: usize = 7;
-        const END_ITEM: usize = 15;
+        const START_ITEM: usize = 14;
+        const END_ITEM: usize = 18;
         let items_iter = rust_doc
             .index
             .iter()
@@ -1583,8 +1609,11 @@ mod test {
             item.print(&rust_doc);
 
             if !markdown_only {
-                println!("--- Debug ---");
-                println!("{item:#?}");
+                // NOTE: Uncomment this if the debug impl will be helpful for
+                // debugging a parse or display error, but otherwise prefer to
+                // keep this commented to avoid cluttering our context.
+                // println!("--- Debug ---");
+                // println!("{item:#?}");
 
                 if let Some(item_json) = index_json.get(id) {
                     println!("--- Raw JSON ---");
