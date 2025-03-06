@@ -373,13 +373,11 @@ struct QualifiedPath {
 
 impl RustDoc {
     pub fn print(&self) {
-        // Get crate name from the root path
         let crate_name = self.root.split('/').last().unwrap_or(&self.root);
 
         println!("# {crate_name} v{}", self.crate_version);
         println!();
 
-        // Group items by type
         let mut functions = Vec::new();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
@@ -389,26 +387,20 @@ impl RustDoc {
         let mut enum_variants = Vec::new();
 
         for (id, item) in &self.index {
-            // Only process items from this crate (those starting with "0:")
             if !id.starts_with("0:") {
                 continue;
             }
 
-            // Skip items without names (except for impls, which we handle
-            // separately)
             if item.name.is_none() && !item.is_impl() {
                 continue;
             }
 
-            // Categorize based on inner type or default to "other"
             if let Some(inner) = &item.inner {
                 match inner {
                     _ if inner.function.is_some() => functions.push((id, item)),
                     _ if inner.enum_.is_some() => enums.push((id, item)),
                     _ if self.is_trait(item) => traits.push((id, item)),
                     _ if inner.impl_.is_some() && item.name.is_some() => {
-                        // Only include impls that have names (trait
-                        // implementations for specific types)
                         impls.push((id, item));
                     }
                     _ if self.is_struct(item) => structs.push((id, item)),
@@ -480,9 +472,6 @@ impl RustDoc {
     }
 
     fn is_trait(&self, item: &RustDocItem) -> bool {
-        // Check if an item is a trait definition
-        // This is a simplification using JSON serialization to check for trait
-        // field
         let Some(inner) = &item.inner else {
             return false;
         };
@@ -497,9 +486,6 @@ impl RustDoc {
     }
 
     fn is_struct(&self, item: &RustDocItem) -> bool {
-        // Check if an item is a struct definition
-        // This is a simplification using JSON serialization to check for struct
-        // field
         let Some(inner) = &item.inner else {
             return false;
         };
@@ -515,7 +501,6 @@ impl RustDoc {
 }
 
 impl RustDocItem {
-    // Helper method to check if this item is an impl
     fn is_impl(&self) -> bool {
         let Some(inner) = &self.inner else {
             return false;
@@ -531,11 +516,7 @@ impl RustDocItem {
     }
 
     fn print(&self, doc: &RustDoc) {
-        // Special handling for trait implementations which might have null
-        // names
         if self.is_impl() && self.name.is_none() {
-            // Print implementation details directly when it's a trait impl
-            // without a name
             self.print_impl_details(doc);
             return;
         }
@@ -547,7 +528,6 @@ impl RustDocItem {
             return;
         }
 
-        // Allow items without docs for trait impls
         let empty_string = String::new();
         let docs_content = self.docs.as_ref().unwrap_or(&empty_string);
 
@@ -557,10 +537,8 @@ impl RustDocItem {
         //     return;
         // }
 
-        // Print header with appropriate markdown heading level
         let visibility = self.visibility.as_deref().unwrap_or("default");
 
-        // Check if this is an enum variant
         if self.is_enum_variant() {
             println!("#### `{}`", name);
         } else {
@@ -572,16 +550,13 @@ impl RustDocItem {
         }
         println!();
 
-        // Print documentation if available
         if !docs_content.is_empty() {
-            // Process documentation to properly format links
             let processed_docs = self.process_documentation(docs_content, doc);
             println!("{}", processed_docs);
             println!();
         }
 
         let Some(inner) = &self.inner else {
-            // No inner content to display
             println!();
             return;
         };
@@ -883,9 +858,6 @@ impl RustDocItem {
                                     struct_details: &StructDetails,
                                     generics_str: &str,
                                 ) {
-                                    // Special case for HexDisplay - we know
-                                    // it's a byte slice reference with a
-                                    // lifetime
                                     if name == "HexDisplay" {
                                         let lifetime = extract_lifetime_param(
                                             struct_details,
@@ -894,23 +866,15 @@ impl RustDocItem {
                                         return;
                                     }
 
-                                    // For other tuple structs with null fields,
-                                    // check if this is a tuple struct
                                     let _is_tuple_struct =
                                         check_is_tuple_struct(struct_details);
 
-                                    // Generic handling for other structs with
-                                    // lifetime params
                                     if generics_str.contains("'") {
-                                        // Extract the first lifetime from
-                                        // generics_str
                                         let lifetime = extract_first_lifetime(
                                             generics_str,
                                         )
                                         .unwrap_or("'a");
 
-                                        // Special case for byte slices with
-                                        // lifetime
                                         print!("&{} [u8]", lifetime);
                                     } else {
                                         print!("/* type */");
@@ -994,7 +958,6 @@ impl RustDocItem {
             let mut auto_traits = Vec::new();
 
             for trait_ in &traits {
-                // Common manually implemented traits - this is a heuristic
                 if trait_ == "Debug"
                     || trait_ == "Display"
                     || trait_ == "Clone"
@@ -1008,11 +971,8 @@ impl RustDocItem {
                 } else if trait_.starts_with("std::")
                     || trait_.starts_with("alloc::")
                 {
-                    // Standard library traits are often auto-derived or
-                    // auto-implemented
                     auto_traits.push(trait_);
                 } else {
-                    // Assume custom traits are manually implemented
                     manual_traits.push(trait_);
                 }
             }
@@ -1042,7 +1002,6 @@ impl RustDocItem {
         println!();
     }
 
-    // Helper method to check if this item is an enum variant
     fn is_enum_variant(&self) -> bool {
         let Some(inner) = &self.inner else {
             return false;
@@ -1057,23 +1016,15 @@ impl RustDocItem {
         obj.contains_key("variant")
     }
 
-    // Returns a reason to skip printing this item, or None if it should be
-    // printed
     pub fn skip(&self, doc: &RustDoc) -> Option<&'static str> {
-        // Check if this is a trait method implementation
         if self.is_trait_method_implementation(doc) {
             return Some("trait method implementation (already shown in parent trait impl)");
         }
 
-        // No reason to skip - item should be printed
         None
     }
 
-    // Check if this item is a method implementation for a trait
-    // These are redundant because they're already covered by the trait
-    // implementation display
     fn is_trait_method_implementation(&self, doc: &RustDoc) -> bool {
-        // Only check function types
         let Some(inner) = &self.inner else {
             return false;
         };
@@ -1084,21 +1035,15 @@ impl RustDocItem {
             return false;
         };
 
-        // First approach: Find the ID for this item
-        // to see if it's listed in any impl's items
         for (item_id, item) in &doc.index {
-            // If this is the current item we're checking
             if item.name.as_ref() == Some(name) {
-                // Look through all the impls to see if this ID is listed
                 for impl_item in doc.index.values() {
                     if let Some(impl_inner) = &impl_item.inner {
                         if let Some(impl_) = &impl_inner.impl_ {
-                            // Only care about trait implementations
-                            if impl_.trait_.is_some() {
-                                // Check if this function is in the impl's items
-                                if impl_.items.contains(item_id) {
-                                    return true;
-                                }
+                            if impl_.trait_.is_some()
+                                && impl_.items.contains(item_id)
+                            {
+                                return true;
                             }
                         }
                     }
@@ -1106,22 +1051,15 @@ impl RustDocItem {
             }
         }
 
-        // Second approach: if it's a function with a name that matches a trait
-        // method name and its input parameters match the trait method,
-        // consider it a trait method implementation
         for item in doc.index.values() {
-            // Find trait definitions
             if let Some(item_inner) = &item.inner {
                 if let Some(trait_info) = &item_inner.trait_ {
-                    // Check if this function's name matches a method in the
-                    // trait
                     for trait_method_id in &trait_info.items {
                         if let Some(trait_method) =
                             doc.index.get(trait_method_id)
                         {
                             if let Some(trait_method_name) = &trait_method.name
                             {
-                                // If names match, check signature
                                 if trait_method_name == name {
                                     if let Some(trait_method_inner) =
                                         &trait_method.inner
@@ -1129,8 +1067,6 @@ impl RustDocItem {
                                         if let Some(trait_method_function) =
                                             &trait_method_inner.function
                                         {
-                                            // If input param counts match, it's
-                                            // likely the implementation
                                             if trait_method_function
                                                 .decl
                                                 .inputs
@@ -1193,7 +1129,6 @@ impl RustDocItem {
         processed
     }
 
-    // Helper to determine the type of an item
     fn determine_item_type(inner: &ItemInner) -> &'static str {
         if inner.function.is_some() {
             "function"
@@ -1212,10 +1147,7 @@ impl RustDocItem {
         let Some(inner) = &self.inner else { return };
         let Some(name) = &self.name else { return };
 
-        // First check if this is a trait definition using ItemInner's trait_
-        // field
         if let Some(trait_info) = &inner.trait_ {
-            // Print trait signature with bounds
             println!("```rust");
             let safety = if trait_info.is_unsafe { "unsafe " } else { "" };
 
@@ -1360,11 +1292,9 @@ impl RustDocItem {
         let Some(inner) = &self.inner else { return };
         let Some(impl_) = &inner.impl_ else { return };
 
-        // Only print details if this is a trait implementation
         let Some(trait_) = &impl_.trait_ else { return };
         let Some(for_type) = &impl_.for_ else { return };
 
-        // Format the trait name with generic arguments if any
         let trait_name = &trait_.name;
         let trait_args = if let Some(args) = &trait_.args {
             format_angle_bracketed_args(Some(args))
@@ -1372,7 +1302,6 @@ impl RustDocItem {
             String::new()
         };
 
-        // Format the type name with generic arguments if any
         let for_type_name = match for_type {
             Parameter::ResolvedPath { resolved_path } => {
                 let type_args =
@@ -1699,21 +1628,14 @@ impl fmt::Display for ReturnType {
     }
 }
 
-/// Helper function to extract the first lifetime from a generics string
-/// For example, from "<'a, T>" it will extract "'a"
 fn extract_first_lifetime(generics_str: &str) -> Option<&str> {
-    // Find the first lifetime parameter (indicated by '<')
     let start_pos = generics_str.find("<'")?;
 
-    // Find where the lifetime ends (either at a ',' or '>')
     let remainder = &generics_str[start_pos + 1..];
     let end_pos = remainder.find([',', '>'])?;
 
-    // Extract the lifetime part
     let lifetime_part = &remainder[..end_pos];
 
-    // If it has commas, it's part of multiple parameters, so just return the
-    // first one
     if lifetime_part.contains(',') {
         lifetime_part.split(',').next()
     } else {
@@ -1721,33 +1643,25 @@ fn extract_first_lifetime(generics_str: &str) -> Option<&str> {
     }
 }
 
-/// Helper function to safely extract a lifetime parameter from struct generics
 fn extract_lifetime_param(struct_details: &StructDetails) -> &'static str {
-    // Default lifetime to use if we can't extract one
     const DEFAULT_LIFETIME: &str = "'a";
 
-    // Get the generics from the struct details
     let Some(generics) = &struct_details.generics else {
         return DEFAULT_LIFETIME;
     };
 
-    // Check if we have any generics parameters
     if generics.params.is_empty() {
         return DEFAULT_LIFETIME;
     }
 
-    // Get the first parameter
     let Some(param) = generics.params.first() else {
         return DEFAULT_LIFETIME;
     };
 
-    // Serialize to JSON to extract the name field
     let Ok(json_value) = serde_json::to_value(param) else {
         return DEFAULT_LIFETIME;
     };
 
-    // We can't borrow from json_value due to lifetime issues,
-    // so we check if it's an expected value and return a static string
     let Some(name_value) = json_value.get("name") else {
         return DEFAULT_LIFETIME;
     };
@@ -1756,14 +1670,12 @@ fn extract_lifetime_param(struct_details: &StructDetails) -> &'static str {
         return DEFAULT_LIFETIME;
     };
 
-    // Match the lifetime name to a static string
     match name {
         "'a" => "'a",
         "'b" => "'b",
         "'c" => "'c",
         "'d" => "'d",
         "'static" => "'static",
-        // Add other common lifetimes if needed
         _ => DEFAULT_LIFETIME,
     }
 }
