@@ -483,42 +483,51 @@ impl RustDoc {
         // Check if an item is a trait definition
         // This is a simplification using JSON serialization to check for trait
         // field
-        if let Some(inner) = &item.inner {
-            if let Ok(value) = serde_json::to_value(inner) {
-                if let Some(obj) = value.as_object() {
-                    return obj.contains_key("trait");
-                }
-            }
-        }
-        false
+        let Some(inner) = &item.inner else {
+            return false;
+        };
+        let Ok(value) = serde_json::to_value(inner) else {
+            return false;
+        };
+        let Some(obj) = value.as_object() else {
+            return false;
+        };
+
+        obj.contains_key("trait")
     }
 
     fn is_struct(&self, item: &RustDocItem) -> bool {
         // Check if an item is a struct definition
         // This is a simplification using JSON serialization to check for struct
         // field
-        if let Some(inner) = &item.inner {
-            if let Ok(value) = serde_json::to_value(inner) {
-                if let Some(obj) = value.as_object() {
-                    return obj.contains_key("struct");
-                }
-            }
-        }
-        false
+        let Some(inner) = &item.inner else {
+            return false;
+        };
+        let Ok(value) = serde_json::to_value(inner) else {
+            return false;
+        };
+        let Some(obj) = value.as_object() else {
+            return false;
+        };
+
+        obj.contains_key("struct")
     }
 }
 
 impl RustDocItem {
     // Helper method to check if this item is an impl
     fn is_impl(&self) -> bool {
-        if let Some(inner) = &self.inner {
-            if let Ok(inner_json) = serde_json::to_value(inner) {
-                if let Some(obj) = inner_json.as_object() {
-                    return obj.contains_key("impl");
-                }
-            }
-        }
-        false
+        let Some(inner) = &self.inner else {
+            return false;
+        };
+        let Ok(inner_json) = serde_json::to_value(inner) else {
+            return false;
+        };
+        let Some(obj) = inner_json.as_object() else {
+            return false;
+        };
+
+        obj.contains_key("impl")
     }
 
     fn print(&self, doc: &RustDoc) {
@@ -624,102 +633,118 @@ impl RustDocItem {
 
         // Handle enum variant
         if self.is_enum_variant() {
-            if let Some(variant_inner) = &inner.variant {
-                println!("```rust");
+            let Some(variant_inner) = &inner.variant else {
+                return;
+            };
 
-                if let Some(kind_obj) = variant_inner.kind.as_object() {
-                    match (
-                        kind_obj.get("tuple"),
-                        kind_obj.get("struct"),
-                        kind_obj.get("kind"),
-                    ) {
-                        // Handle tuple variant
-                        (Some(tuple), _, _) => {
-                            let tuple_array = tuple.as_array();
+            println!("```rust");
 
-                            if let Some(arr) = tuple_array {
-                                if arr.is_empty() {
-                                    println!("{}(),", name);
-                                } else {
-                                    print!("{}(", name);
-                                    for (i, _) in arr.iter().enumerate() {
-                                        if i > 0 {
-                                            print!(", ");
-                                        }
-                                        print!("/* field type */");
-                                    }
-                                    println!("),");
-                                }
-                            } else {
-                                println!("{},", name);
-                            }
-                        }
-
-                        // Handle struct variant
-                        (_, Some(struct_fields), _) => {
-                            let fields_array = struct_fields.as_array();
-
-                            if let Some(arr) = fields_array {
-                                if arr.is_empty() {
-                                    println!("{} {{}},", name);
-                                } else {
-                                    println!("{} {{", name);
-                                    println!("    // fields...");
-                                    println!("{}}},", name);
-                                }
-                            } else {
-                                println!("{},", name);
-                            }
-                        }
-
-                        // Handle plain variant
-                        (_, _, Some(kind_str)) => {
-                            let is_plain_with_discriminant = kind_str
-                                .as_str()
-                                .map(|k| {
-                                    k == "plain"
-                                        && variant_inner.discriminant.is_some()
-                                })
-                                .unwrap_or(false);
-
-                            if is_plain_with_discriminant {
-                                // We know discriminant exists at this point
-                                let discriminant = variant_inner
-                                    .discriminant
-                                    .as_ref()
-                                    .unwrap();
-
-                                // Try to get expression from discriminant
-                                let expr_str = discriminant
-                                    .get("expr")
-                                    .and_then(|e| e.as_str());
-
-                                if let Some(s) = expr_str {
-                                    println!("{} = {},", name, s);
-                                    return;
-                                }
-
-                                // Try direct string representation
-                                if let Some(s) = discriminant.as_str() {
-                                    println!("{} = {},", name, s);
-                                    return;
-                                }
-                            }
-
-                            // Default case for plain variants
-                            println!("{},", name);
-                        }
-
-                        // Default for any other variant type
-                        _ => println!("{},", name),
-                    }
-                } else {
-                    println!("{},", name);
-                }
-
+            // Extract kind object or use default formatting
+            let kind_obj = variant_inner.kind.as_object();
+            if kind_obj.is_none() {
+                println!("{},", name);
                 println!("```");
                 println!();
+                return;
             }
+
+            let kind_obj = kind_obj.unwrap();
+            let tuple = kind_obj.get("tuple");
+            let struct_fields = kind_obj.get("struct");
+            let kind_str = kind_obj.get("kind");
+
+            // Handle tuple variant
+            if let Some(tuple) = tuple {
+                print_tuple_variant(name, tuple);
+            }
+            // Handle struct variant
+            else if let Some(struct_fields) = struct_fields {
+                print_struct_variant(name, struct_fields);
+            }
+            // Handle plain variant
+            else if let Some(kind_str) = kind_str {
+                print_plain_variant(name, kind_str, variant_inner);
+            }
+            // Default for any other variant type
+            else {
+                println!("{},", name);
+            }
+
+            println!("```");
+            println!();
+        }
+
+        // Helper functions for enum variant handling
+        fn print_tuple_variant(name: &str, tuple: &serde_json::Value) {
+            let tuple_array = tuple.as_array();
+
+            if let Some(arr) = tuple_array {
+                if arr.is_empty() {
+                    println!("{}(),", name);
+                    return;
+                }
+
+                print!("{}(", name);
+                for (i, _) in arr.iter().enumerate() {
+                    if i > 0 {
+                        print!(", ");
+                    }
+                    print!("/* field type */");
+                }
+                println!("),");
+            } else {
+                println!("{},", name);
+            }
+        }
+
+        fn print_struct_variant(name: &str, struct_fields: &serde_json::Value) {
+            let fields_array = struct_fields.as_array();
+
+            if let Some(arr) = fields_array {
+                if arr.is_empty() {
+                    println!("{} {{}},", name);
+                    return;
+                }
+
+                println!("{} {{", name);
+                println!("    // fields...");
+                println!("{}}},", name);
+            } else {
+                println!("{},", name);
+            }
+        }
+
+        fn print_plain_variant(
+            name: &str,
+            kind_str: &serde_json::Value,
+            variant_inner: &EnumVariantDetails,
+        ) {
+            // Check if it's a plain variant with discriminant
+            let kind_str_value = kind_str.as_str();
+            let is_plain = kind_str_value.map_or(false, |k| k == "plain");
+            let has_discriminant = variant_inner.discriminant.is_some();
+
+            if is_plain && has_discriminant {
+                // We know discriminant exists at this point
+                let discriminant = variant_inner.discriminant.as_ref().unwrap();
+
+                // Try to get expression from discriminant
+                if let Some(expr) = discriminant.get("expr") {
+                    if let Some(s) = expr.as_str() {
+                        println!("{} = {},", name, s);
+                        return;
+                    }
+                }
+
+                // Try direct string representation
+                if let Some(s) = discriminant.as_str() {
+                    println!("{} = {},", name, s);
+                    return;
+                }
+            }
+
+            // Default case for plain variants
+            println!("{},", name);
         }
 
         // Print enum definitions with more detailed formatting
@@ -828,68 +853,18 @@ impl RustDocItem {
                                     }
 
                                     // Try to parse field type from value
-                                    if field_value.is_null()
-                                        && name == "HexDisplay"
-                                    {
-                                        // Special case for HexDisplay - we know
-                                        // it's a byte slice reference with a
-                                        // lifetime
-                                        let lifetime = extract_lifetime_param(
+                                    // Handle special cases and null values
+                                    if field_value.is_null() {
+                                        handle_null_field_value(
+                                            name,
                                             struct_details,
+                                            &generics_str,
                                         );
-
-                                        print!("&{} [u8]", lifetime);
                                         continue;
-                                    } else if field_value.is_null() {
-                                        // For other tuple structs with null
-                                        // fields,
-                                        // check if this is a tuple struct
-                                        let is_tuple_struct =
-                                            match serde_json::to_value(
-                                                struct_details,
-                                            ) {
-                                                Ok(json_value) =>
-                                                    match json_value.as_object()
-                                                    {
-                                                        Some(obj) => {
-                                                            match obj.get("kind") {
-                                                            Some(kind) => {
-                                                                match kind.as_object() {
-                                                                    Some(kind_obj) => kind_obj.contains_key("tuple"),
-                                                                    None => false,
-                                                                }
-                                                            },
-                                                            None => false,
-                                                        }
-                                                        }
-                                                        None => false,
-                                                    },
-                                                Err(_) => false,
-                                            };
+                                    }
 
-                                        if !is_tuple_struct {
-                                            // Not a tuple struct, continue with
-                                            // default handling
-                                        }
-
-                                        // Generic handling for other structs
-                                        // with lifetime params
-                                        if generics_str.contains("'") {
-                                            // Extract the first lifetime from
-                                            // generics_str
-                                            let lifetime =
-                                                extract_first_lifetime(
-                                                    &generics_str,
-                                                )
-                                                .unwrap_or("'a");
-
-                                            // Special case for byte slices with
-                                            // lifetime
-                                            print!("&{} [u8]", lifetime);
-                                        } else {
-                                            print!("/* type */");
-                                        }
-                                    } else if let Some(field_obj) =
+                                    // Handle object field values
+                                    if let Some(field_obj) =
                                         field_value.as_object()
                                     {
                                         let type_name = field_obj
@@ -900,6 +875,71 @@ impl RustDocItem {
                                     } else {
                                         print!("/* field type */");
                                     }
+                                }
+
+                                // Helper function to handle null field values
+                                fn handle_null_field_value(
+                                    name: &str,
+                                    struct_details: &StructDetails,
+                                    generics_str: &str,
+                                ) {
+                                    // Special case for HexDisplay - we know
+                                    // it's a byte slice reference with a
+                                    // lifetime
+                                    if name == "HexDisplay" {
+                                        let lifetime = extract_lifetime_param(
+                                            struct_details,
+                                        );
+                                        print!("&{} [u8]", lifetime);
+                                        return;
+                                    }
+
+                                    // For other tuple structs with null fields,
+                                    // check if this is a tuple struct
+                                    let _is_tuple_struct =
+                                        check_is_tuple_struct(struct_details);
+
+                                    // Generic handling for other structs with
+                                    // lifetime params
+                                    if generics_str.contains("'") {
+                                        // Extract the first lifetime from
+                                        // generics_str
+                                        let lifetime = extract_first_lifetime(
+                                            generics_str,
+                                        )
+                                        .unwrap_or("'a");
+
+                                        // Special case for byte slices with
+                                        // lifetime
+                                        print!("&{} [u8]", lifetime);
+                                    } else {
+                                        print!("/* type */");
+                                    }
+                                }
+
+                                // Helper function to check if a struct is a
+                                // tuple struct
+                                fn check_is_tuple_struct(
+                                    struct_details: &StructDetails,
+                                ) -> bool {
+                                    let Ok(json_value) =
+                                        serde_json::to_value(struct_details)
+                                    else {
+                                        return false;
+                                    };
+                                    let Some(obj) = json_value.as_object()
+                                    else {
+                                        return false;
+                                    };
+                                    let Some(kind) = obj.get("kind") else {
+                                        return false;
+                                    };
+                                    let Some(kind_obj) = kind.as_object()
+                                    else {
+                                        return false;
+                                    };
+
+                                    kind_obj.contains_key("tuple")
                                 }
                             }
                         }
@@ -1004,14 +1044,17 @@ impl RustDocItem {
 
     // Helper method to check if this item is an enum variant
     fn is_enum_variant(&self) -> bool {
-        if let Some(inner) = &self.inner {
-            if let Ok(inner_json) = serde_json::to_value(inner) {
-                if let Some(obj) = inner_json.as_object() {
-                    return obj.contains_key("variant");
-                }
-            }
-        }
-        false
+        let Some(inner) = &self.inner else {
+            return false;
+        };
+        let Ok(inner_json) = serde_json::to_value(inner) else {
+            return false;
+        };
+        let Some(obj) = inner_json.as_object() else {
+            return false;
+        };
+
+        obj.contains_key("variant")
     }
 
     // Returns a reason to skip printing this item, or None if it should be
@@ -1119,48 +1162,50 @@ impl RustDocItem {
 
         for (link_text, target_id_json) in &self.links {
             // Extract the target ID as a string key for searching in the index
-            let target_id = target_id_json.as_str();
-            if target_id.is_none() {
+            let Some(target_id) = target_id_json.as_str() else {
                 continue;
-            }
+            };
 
             // Search for the target item in the index by ID
-            if let Some(item) = doc.index.get(target_id.unwrap()) {
-                if let Some(target_name) = &item.name {
-                    // Format the replacement link based on the item type
-                    let replacement = if let Some(inner) = &item.inner {
-                        let item_type = if inner.function.is_some() {
-                            "function"
-                        } else if inner.struct_.is_some() {
-                            "struct"
-                        } else if inner.enum_.is_some() {
-                            "enum"
-                        } else if inner.trait_.is_some() {
-                            "trait"
-                        } else {
-                            "item"
-                        };
+            let Some(item) = doc.index.get(target_id) else {
+                continue;
+            };
+            let Some(target_name) = &item.name else {
+                continue;
+            };
 
-                        format!(
-                            "[{}](#{}-{})",
-                            link_text,
-                            target_name.to_lowercase(),
-                            item_type
-                        )
-                    } else {
-                        format!(
-                            "[{}](#{}-item)",
-                            link_text,
-                            target_name.to_lowercase()
-                        )
-                    };
+            // Format the replacement link based on the item type
+            let replacement = if let Some(inner) = &item.inner {
+                let item_type = Self::determine_item_type(inner);
+                format!(
+                    "[{}](#{}-{})",
+                    link_text,
+                    target_name.to_lowercase(),
+                    item_type
+                )
+            } else {
+                format!("[{}](#{}-item)", link_text, target_name.to_lowercase())
+            };
 
-                    processed = processed.replace(link_text, &replacement);
-                }
-            }
+            processed = processed.replace(link_text, &replacement);
         }
 
         processed
+    }
+
+    // Helper to determine the type of an item
+    fn determine_item_type(inner: &ItemInner) -> &'static str {
+        if inner.function.is_some() {
+            "function"
+        } else if inner.struct_.is_some() {
+            "struct"
+        } else if inner.enum_.is_some() {
+            "enum"
+        } else if inner.trait_.is_some() {
+            "trait"
+        } else {
+            "item"
+        }
     }
 
     fn print_trait_details(&self, doc: &RustDoc) {
@@ -1681,42 +1726,46 @@ fn extract_lifetime_param(struct_details: &StructDetails) -> &'static str {
     // Default lifetime to use if we can't extract one
     const DEFAULT_LIFETIME: &str = "'a";
 
-    // Try to extract from generics
-    if let Some(generics) = &struct_details.generics {
-        if !generics.params.is_empty() {
-            if let Some(param) = generics.params.first() {
-                // Serialize to JSON and extract the name field
-                if let Ok(json_value) = serde_json::to_value(param) {
-                    // We can't borrow from this json_value due to lifetime
-                    // issues, so we check if it's the
-                    // expected value and return a static string
-                    if let Some(name_value) = json_value.get("name") {
-                        if let Some(name) = name_value.as_str() {
-                            if name == "'a" {
-                                return "'a";
-                            }
-                            if name == "'b" {
-                                return "'b";
-                            }
-                            if name == "'c" {
-                                return "'c";
-                            }
-                            if name == "'d" {
-                                return "'d";
-                            }
-                            if name == "'static" {
-                                return "'static";
-                            }
-                            // Add other common lifetimes if needed
-                        }
-                    }
-                }
-            }
-        }
+    // Get the generics from the struct details
+    let Some(generics) = &struct_details.generics else {
+        return DEFAULT_LIFETIME;
+    };
+
+    // Check if we have any generics parameters
+    if generics.params.is_empty() {
+        return DEFAULT_LIFETIME;
     }
 
-    // Return the default lifetime if extraction failed
-    DEFAULT_LIFETIME
+    // Get the first parameter
+    let Some(param) = generics.params.first() else {
+        return DEFAULT_LIFETIME;
+    };
+
+    // Serialize to JSON to extract the name field
+    let Ok(json_value) = serde_json::to_value(param) else {
+        return DEFAULT_LIFETIME;
+    };
+
+    // We can't borrow from json_value due to lifetime issues,
+    // so we check if it's an expected value and return a static string
+    let Some(name_value) = json_value.get("name") else {
+        return DEFAULT_LIFETIME;
+    };
+
+    let Some(name) = name_value.as_str() else {
+        return DEFAULT_LIFETIME;
+    };
+
+    // Match the lifetime name to a static string
+    match name {
+        "'a" => "'a",
+        "'b" => "'b",
+        "'c" => "'c",
+        "'d" => "'d",
+        "'static" => "'static",
+        // Add other common lifetimes if needed
+        _ => DEFAULT_LIFETIME,
+    }
 }
 
 fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
@@ -1726,43 +1775,9 @@ fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
             let formatted_args = angle_bracketed
                 .args
                 .iter()
-                .map(|arg| match arg {
-                    GenericArg::Type { type_inner } => {
-                        if let Some(generic) = &type_inner.generic {
-                            // Handle Self and other generic types
-                            generic.clone()
-                        } else if let Some(primitive) = &type_inner.primitive {
-                            primitive.clone()
-                        } else if let Some(slice) = &type_inner.slice {
-                            format!("[{}]", slice.primitive)
-                        } else if let Some(tuple) = &type_inner.tuple {
-                            if tuple.is_empty() {
-                                "()".to_string()
-                            } else {
-                                format!(
-                                    "({})",
-                                    tuple
-                                        .iter()
-                                        .map(|t| t.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                )
-                            }
-                        } else if let Some(resolved_path) =
-                            &type_inner.resolved_path
-                        {
-                            let inner_args = format_angle_bracketed_args(
-                                resolved_path.args.as_ref(),
-                            );
-                            format!("{}{}", resolved_path.name, inner_args)
-                        } else {
-                            "/* unknown type */".to_string()
-                        }
-                    }
-                    GenericArg::Lifetime { lifetime } => lifetime.clone(),
-                    GenericArg::Const { const_ } => const_.expr.clone(),
-                })
+                .map(format_generic_arg)
                 .collect::<Vec<_>>();
+
             if formatted_args.is_empty() {
                 String::new()
             } else {
@@ -1774,6 +1789,59 @@ fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
             // TODO(max): If we want to print them, do something like:
             // format!("({}...)", ...)
         }
+    }
+}
+
+// Helper function to format a generic argument
+fn format_generic_arg(arg: &GenericArg) -> String {
+    match arg {
+        GenericArg::Type { type_inner } => format_type_arg(type_inner),
+        GenericArg::Lifetime { lifetime } => lifetime.clone(),
+        GenericArg::Const { const_ } => const_.expr.clone(),
+    }
+}
+
+// Helper function to format a type argument
+fn format_type_arg(type_inner: &TypeContent) -> String {
+    // Try each type of content in order
+    if let Some(generic) = &type_inner.generic {
+        // Handle Self and other generic types
+        return generic.clone();
+    }
+
+    if let Some(primitive) = &type_inner.primitive {
+        return primitive.clone();
+    }
+
+    if let Some(slice) = &type_inner.slice {
+        return format!("[{}]", slice.primitive);
+    }
+
+    if let Some(tuple) = &type_inner.tuple {
+        return format_tuple_type(tuple);
+    }
+
+    if let Some(resolved_path) = &type_inner.resolved_path {
+        let inner_args =
+            format_angle_bracketed_args(resolved_path.args.as_ref());
+        return format!("{}{}", resolved_path.name, inner_args);
+    }
+
+    // Default case for unknown types
+    "/* unknown type */".to_string()
+}
+
+// Helper function to format a tuple type
+fn format_tuple_type(tuple: &[ReturnType]) -> String {
+    if tuple.is_empty() {
+        "()".to_string()
+    } else {
+        let formatted_elements = tuple
+            .iter()
+            .map(|t| t.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("({})", formatted_elements)
     }
 }
 
