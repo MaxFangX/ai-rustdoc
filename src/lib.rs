@@ -1328,6 +1328,13 @@ impl RustDocItem {
                     format_angle_bracketed_args(resolved_path.args.as_ref());
                 format!("{}{}", resolved_path.name, type_args)
             }
+            Parameter::Array { array } => {
+                let inner_type = match &*array.type_ {
+                    Parameter::Primitive { primitive } => primitive.clone(),
+                    _ => "/* type */".to_string(),
+                };
+                format!("[{}; {}]", inner_type, array.len)
+            }
             _ => "/* Unknown */".to_string(),
         };
 
@@ -1784,7 +1791,7 @@ mod test {
 
         // Print a subset of items using the below filters.
         const START_ITEM: usize = 7;
-        const END_ITEM: usize = 13;
+        const END_ITEM: usize = 15;
         let items_iter = rust_doc
             .index
             .iter()
