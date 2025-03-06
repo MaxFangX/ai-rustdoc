@@ -1561,18 +1561,18 @@ mod test {
             matches!(env::var("MARKDOWN_ONLY").as_deref(), Ok("true"));
 
         // Print a subset of items using the below filters.
-        const START_IDX: usize = 7;
-        const NUM_RESULTS: usize = 9;
+        const START_ITEM: usize = 7;
+        const END_ITEM: usize = 15;
         let items_iter = rust_doc
             .index
             .iter()
             // Only include items from this crate
             .filter(|(id, _item)| id.starts_with("0:"))
-            .skip(START_IDX)
-            .take(NUM_RESULTS)
+            .skip(START_ITEM)
+            .take(END_ITEM - START_ITEM + 1)
             .enumerate();
         for (i, (id, item)) in items_iter {
-            let idx = START_IDX + i;
+            let idx = START_ITEM + i;
             println!();
             println!("┏━━━━━━━━━ Item {idx} ━━━━━━━━━━");
 
