@@ -376,7 +376,7 @@ impl RustDoc {
         // Get crate name from the root path
         let crate_name = self.root.split('/').last().unwrap_or(&self.root);
 
-        println!("# {} v{}", crate_name, self.crate_version);
+        println!("# {crate_name} v{}", self.crate_version);
         println!();
 
         // Group items by type
@@ -1814,7 +1814,7 @@ mod test {
                         item.print(&rust_doc);
                     }
                     Some(reason) => {
-                        println!("Skipped: {}", reason);
+                        println!("Skipped: {reason}");
                         println!();
                     }
                 }
@@ -1824,7 +1824,7 @@ mod test {
                         item.print(&rust_doc);
                     }
                     Some(reason) => {
-                        println!("Skipped: {}", reason);
+                        println!("Skipped: {reason}");
                         println!();
                     }
                 }
