@@ -981,11 +981,51 @@ impl RustDocItem {
 
         // Print trait implementations if we found any
         if !traits.is_empty() {
-            println!("**Implements:**");
-            for trait_ in traits {
-                println!("- `{}`", trait_);
+            // Separate manually implemented traits from auto-derived traits
+            let mut manual_traits = Vec::new();
+            let mut auto_traits = Vec::new();
+
+            for trait_ in &traits {
+                // Common manually implemented traits - this is a heuristic
+                if trait_ == "Debug"
+                    || trait_ == "Display"
+                    || trait_ == "Clone"
+                    || trait_ == "PartialEq"
+                    || trait_ == "Eq"
+                    || trait_ == "PartialOrd"
+                    || trait_ == "Ord"
+                    || trait_ == "Hash"
+                {
+                    manual_traits.push(trait_);
+                } else if trait_.starts_with("std::")
+                    || trait_.starts_with("alloc::")
+                {
+                    // Standard library traits are often auto-derived or
+                    // auto-implemented
+                    auto_traits.push(trait_);
+                } else {
+                    // Assume custom traits are manually implemented
+                    manual_traits.push(trait_);
+                }
             }
-            println!();
+
+            // Print manually implemented traits first
+            if !manual_traits.is_empty() {
+                println!("**Implements:**");
+                for trait_ in manual_traits {
+                    println!("- `{}`", trait_);
+                }
+                println!();
+            }
+
+            // Print auto-derived traits
+            if !auto_traits.is_empty() {
+                println!("**Auto-implemented traits:**");
+                for trait_ in auto_traits {
+                    println!("- `{}`", trait_);
+                }
+                println!();
+            }
         }
 
         // Print implementation details for trait impls
@@ -1241,7 +1281,9 @@ impl RustDocItem {
                                     }
                                 }
 
-                                println!(";");
+                                println!(" {{ ... }}"); // Empty block instead
+                                                        // of
+                                                        // semicolon
                             }
                         }
                     }
@@ -1406,7 +1448,7 @@ impl RustDocItem {
                         print!(" -> {ret}");
                     }
 
-                    println!(";");
+                    println!(" {{ ... }}"); // Empty block instead of semicolon
                 }
             }
         }
@@ -1519,7 +1561,7 @@ impl FunctionDecl {
             print!(" -> {ret}");
         }
 
-        println!(";\n```");
+        println!(" {{ ... }}\n```"); // Empty block instead of semicolon
     }
 }
 
@@ -1790,8 +1832,8 @@ mod test {
         // - ... (TODO)
 
         // Print a subset of items using the below filters.
-        const START_ITEM: usize = 7;
-        const END_ITEM: usize = 15;
+        const START_ITEM: usize = 20;
+        const END_ITEM: usize = 25;
         let items_iter = rust_doc
             .index
             .iter()
