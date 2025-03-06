@@ -481,57 +481,44 @@ impl RustDoc {
 
     fn is_trait(&self, item: &RustDocItem) -> bool {
         // Check if an item is a trait definition
-        // This is a simplification - we would need to check trait-specific
-        // properties
-        let Some(inner) = &item.inner else {
-            return false;
-        };
-
-        // Check if we can serialize the inner to JSON and find a trait field
-        let Ok(value) = serde_json::to_value(inner) else {
-            return false;
-        };
-        let Some(obj) = value.as_object() else {
-            return false;
-        };
-
-        obj.contains_key("trait")
+        // This is a simplification using JSON serialization to check for trait
+        // field
+        if let Some(inner) = &item.inner {
+            if let Ok(value) = serde_json::to_value(inner) {
+                if let Some(obj) = value.as_object() {
+                    return obj.contains_key("trait");
+                }
+            }
+        }
+        false
     }
 
     fn is_struct(&self, item: &RustDocItem) -> bool {
         // Check if an item is a struct definition
-        // This is a simplification - we would need to check struct-specific
-        // properties
-        let Some(inner) = &item.inner else {
-            return false;
-        };
-
-        // Check if we can serialize the inner to JSON and find a struct field
-        let Ok(value) = serde_json::to_value(inner) else {
-            return false;
-        };
-        let Some(obj) = value.as_object() else {
-            return false;
-        };
-
-        obj.contains_key("struct")
+        // This is a simplification using JSON serialization to check for struct
+        // field
+        if let Some(inner) = &item.inner {
+            if let Ok(value) = serde_json::to_value(inner) {
+                if let Some(obj) = value.as_object() {
+                    return obj.contains_key("struct");
+                }
+            }
+        }
+        false
     }
 }
 
 impl RustDocItem {
     // Helper method to check if this item is an impl
     fn is_impl(&self) -> bool {
-        let Some(inner) = &self.inner else {
-            return false;
-        };
-        let Ok(inner_json) = serde_json::to_value(inner) else {
-            return false;
-        };
-        let Some(obj) = inner_json.as_object() else {
-            return false;
-        };
-
-        obj.contains_key("impl")
+        if let Some(inner) = &self.inner {
+            if let Ok(inner_json) = serde_json::to_value(inner) {
+                if let Some(obj) = inner_json.as_object() {
+                    return obj.contains_key("impl");
+                }
+            }
+        }
+        false
     }
 
     fn print(&self, doc: &RustDoc) {
@@ -640,76 +627,91 @@ impl RustDocItem {
             if let Some(variant_inner) = &inner.variant {
                 println!("```rust");
 
-                // Check the kind of variant
                 if let Some(kind_obj) = variant_inner.kind.as_object() {
-                    // Handle tuple variant
-                    if let Some(tuple) = kind_obj.get("tuple") {
-                        if let Some(tuple_array) = tuple.as_array() {
-                            if !tuple_array.is_empty() {
-                                print!("{}(", name);
-                                for (i, _field) in
-                                    tuple_array.iter().enumerate()
-                                {
-                                    if i > 0 {
-                                        print!(", ");
+                    match (
+                        kind_obj.get("tuple"),
+                        kind_obj.get("struct"),
+                        kind_obj.get("kind"),
+                    ) {
+                        // Handle tuple variant
+                        (Some(tuple), _, _) => {
+                            let tuple_array = tuple.as_array();
+
+                            if let Some(arr) = tuple_array {
+                                if arr.is_empty() {
+                                    println!("{}(),", name);
+                                } else {
+                                    print!("{}(", name);
+                                    for (i, _) in arr.iter().enumerate() {
+                                        if i > 0 {
+                                            print!(", ");
+                                        }
+                                        print!("/* field type */");
                                     }
-                                    print!("/* field type */");
+                                    println!("),");
                                 }
-                                println!("),");
                             } else {
-                                println!("{}(),", name);
+                                println!("{},", name);
                             }
-                        } else {
-                            println!("{},", name);
                         }
-                    }
-                    // Handle struct variant
-                    else if let Some(struct_fields) = kind_obj.get("struct") {
-                        if let Some(fields_array) = struct_fields.as_array() {
-                            if !fields_array.is_empty() {
-                                println!("{} {{", name);
-                                // We'd need to look up each field by ID
-                                println!("    // fields...");
-                                println!("{}}},", name);
+
+                        // Handle struct variant
+                        (_, Some(struct_fields), _) => {
+                            let fields_array = struct_fields.as_array();
+
+                            if let Some(arr) = fields_array {
+                                if arr.is_empty() {
+                                    println!("{} {{}},", name);
+                                } else {
+                                    println!("{} {{", name);
+                                    println!("    // fields...");
+                                    println!("{}}},", name);
+                                }
                             } else {
-                                println!("{} {{}},", name);
+                                println!("{},", name);
                             }
-                        } else {
-                            println!("{},", name);
                         }
-                    }
-                    // Handle plain variant
-                    else if let Some(kind_str) = kind_obj.get("kind") {
-                        if let Some(kind) = kind_str.as_str() {
-                            if kind == "plain"
-                                && variant_inner.discriminant.is_some()
-                            {
-                                // Show discriminant if available
+
+                        // Handle plain variant
+                        (_, _, Some(kind_str)) => {
+                            let is_plain_with_discriminant = kind_str
+                                .as_str()
+                                .map(|k| {
+                                    k == "plain"
+                                        && variant_inner.discriminant.is_some()
+                                })
+                                .unwrap_or(false);
+
+                            if is_plain_with_discriminant {
+                                // We know discriminant exists at this point
                                 let discriminant = variant_inner
                                     .discriminant
                                     .as_ref()
                                     .unwrap();
 
-                                // Try to extract expression from discriminant
-                                if let Some(expr) = discriminant.get("expr") {
-                                    if let Some(expr_str) = expr.as_str() {
-                                        println!("{} = {},", name, expr_str);
-                                        return;
-                                    }
+                                // Try to get expression from discriminant
+                                let expr_str = discriminant
+                                    .get("expr")
+                                    .and_then(|e| e.as_str());
+
+                                if let Some(s) = expr_str {
+                                    println!("{} = {},", name, s);
+                                    return;
                                 }
 
-                                // Fallback to direct string representation
-                                if let Some(disc_str) = discriminant.as_str() {
-                                    println!("{} = {},", name, disc_str);
+                                // Try direct string representation
+                                if let Some(s) = discriminant.as_str() {
+                                    println!("{} = {},", name, s);
                                     return;
                                 }
                             }
 
-                            // Default case
-                            println!("{},", name);
-                        } else {
+                            // Default case for plain variants
                             println!("{},", name);
                         }
+
+                        // Default for any other variant type
+                        _ => println!("{},", name),
                     }
                 } else {
                     println!("{},", name);
@@ -826,94 +828,60 @@ impl RustDocItem {
                                     }
 
                                     // Try to parse field type from value
-                                    if field_value.is_null() {
-                                        // For tuple structs with null fields,
-                                        // extract the type from the JSON struct
-                                        // We need to look at the tuple field in
-                                        // the JSON
-                                        if let Ok(json_value) =
-                                            serde_json::to_value(struct_details)
-                                        {
-                                            if let Some(obj) =
-                                                json_value.as_object()
-                                            {
-                                                if let Some(kind) =
-                                                    obj.get("kind")
-                                                {
-                                                    if let Some(kind_obj) =
-                                                        kind.as_object()
+                                    if field_value.is_null()
+                                        && name == "HexDisplay"
+                                    {
+                                        // Special case for HexDisplay - we know
+                                        // it's a byte slice reference with a
+                                        // lifetime
+                                        let lifetime = extract_lifetime_param(
+                                            struct_details,
+                                        );
+
+                                        print!("&{} [u8]", lifetime);
+                                        continue;
+                                    } else if field_value.is_null() {
+                                        // For other tuple structs with null
+                                        // fields,
+                                        // check if this is a tuple struct
+                                        let is_tuple_struct =
+                                            match serde_json::to_value(
+                                                struct_details,
+                                            ) {
+                                                Ok(json_value) =>
+                                                    match json_value.as_object()
                                                     {
-                                                        // Now we have the kind
-                                                        // object, look for
-                                                        // tuple field
-                                                        if kind_obj
-                                                            .contains_key(
-                                                                "tuple",
-                                                            )
-                                                        {
-                                                            // Tuple struct: use
-                                                            // the actual type
-                                                            // if available
-                                                            if name
-                                                                == "HexDisplay"
-                                                            {
-                                                                // Get the proper lifetime param from generics
-                                                                if let Some(generics) = &struct_details.generics {
-                                                                    if let Some(param) = generics.params.first() {
-                                                                        // Extract lifetime name from generic param
-                                                                        if let Ok(json_value) = serde_json::to_value(param) {
-                                                                            if let Some(name) = json_value.get("name").and_then(|n| n.as_str()) {
-                                                                                print!("&{} [u8]", name);
-                                                                                continue;
-                                                                            }
-                                                                        }
-                                                                    }
+                                                        Some(obj) => {
+                                                            match obj.get("kind") {
+                                                            Some(kind) => {
+                                                                match kind.as_object() {
+                                                                    Some(kind_obj) => kind_obj.contains_key("tuple"),
+                                                                    None => false,
                                                                 }
-                                                                // Fallback to
-                                                                // 'a if we couldn'
-                                                                // t extract the
-                                                                // lifetime
-                                                                print!(
-                                                                    "&'a [u8]"
-                                                                );
-                                                                continue;
-                                                            }
+                                                            },
+                                                            None => false,
                                                         }
-                                                    }
-                                                }
-                                            }
+                                                        }
+                                                        None => false,
+                                                    },
+                                                Err(_) => false,
+                                            };
+
+                                        if !is_tuple_struct {
+                                            // Not a tuple struct, continue with
+                                            // default handling
                                         }
 
                                         // Generic handling for other structs
-                                        // Check if we have generics with
-                                        // lifetime params
+                                        // with lifetime params
                                         if generics_str.contains("'") {
-                                            // Extract lifetime from
-                                            // generics_str (e.g. "<'a>" ->
-                                            // "'a")
-                                            let lifetime = match generics_str
-                                                .find("<'")
-                                            {
-                                                Some(start) => {
-                                                    match generics_str
-                                                        [start + 1..]
-                                                        .find(">")
-                                                    {
-                                                        Some(end) => {
-                                                            let lifetime_part = &generics_str[start+1..start+1+end];
-                                                            if lifetime_part
-                                                                .contains(",")
-                                                            {
-                                                                "'a" // Default if multiple params
-                                                            } else {
-                                                                lifetime_part
-                                                            }
-                                                        }
-                                                        None => "'a", /* Default if cannot parse */
-                                                    }
-                                                }
-                                                None => "'a", /* Default if cannot parse */
-                                            };
+                                            // Extract the first lifetime from
+                                            // generics_str
+                                            let lifetime =
+                                                extract_first_lifetime(
+                                                    &generics_str,
+                                                )
+                                                .unwrap_or("'a");
 
                                             // Special case for byte slices with
                                             // lifetime
@@ -1036,17 +1004,14 @@ impl RustDocItem {
 
     // Helper method to check if this item is an enum variant
     fn is_enum_variant(&self) -> bool {
-        let Some(inner) = &self.inner else {
-            return false;
-        };
-        let Ok(inner_json) = serde_json::to_value(inner) else {
-            return false;
-        };
-        let Some(obj) = inner_json.as_object() else {
-            return false;
-        };
-
-        obj.contains_key("variant")
+        if let Some(inner) = &self.inner {
+            if let Ok(inner_json) = serde_json::to_value(inner) {
+                if let Some(obj) = inner_json.as_object() {
+                    return obj.contains_key("variant");
+                }
+            }
+        }
+        false
     }
 
     // Returns a reason to skip printing this item, or None if it should be
@@ -1151,48 +1116,47 @@ impl RustDocItem {
         }
 
         let mut processed = docs.to_string();
-        'outer: for (link_text, target_id_str) in &self.links {
-            // Search for the target item by iterating through the index
-            for (id, item) in &doc.index {
-                if id != target_id_str {
-                    continue;
-                }
 
-                let Some(target_name) = &item.name else {
-                    continue 'outer;
-                };
-                let Some(inner) = &item.inner else {
-                    let replacement = format!(
-                        "[{}](#{}-item)",
-                        link_text,
-                        target_name.to_lowercase()
-                    );
+        for (link_text, target_id_json) in &self.links {
+            // Extract the target ID as a string key for searching in the index
+            let target_id = target_id_json.as_str();
+            if target_id.is_none() {
+                continue;
+            }
+
+            // Search for the target item in the index by ID
+            if let Some(item) = doc.index.get(target_id.unwrap()) {
+                if let Some(target_name) = &item.name {
+                    // Format the replacement link based on the item type
+                    let replacement = if let Some(inner) = &item.inner {
+                        let item_type = if inner.function.is_some() {
+                            "function"
+                        } else if inner.struct_.is_some() {
+                            "struct"
+                        } else if inner.enum_.is_some() {
+                            "enum"
+                        } else if inner.trait_.is_some() {
+                            "trait"
+                        } else {
+                            "item"
+                        };
+
+                        format!(
+                            "[{}](#{}-{})",
+                            link_text,
+                            target_name.to_lowercase(),
+                            item_type
+                        )
+                    } else {
+                        format!(
+                            "[{}](#{}-item)",
+                            link_text,
+                            target_name.to_lowercase()
+                        )
+                    };
+
                     processed = processed.replace(link_text, &replacement);
-                    continue 'outer;
-                };
-
-                // Determine the item type for better anchor links
-                let item_type = if inner.function.is_some() {
-                    "function"
-                } else if inner.struct_.is_some() {
-                    "struct"
-                } else if inner.enum_.is_some() {
-                    "enum"
-                } else if inner.trait_.is_some() {
-                    "trait"
-                } else {
-                    "item"
-                };
-
-                // Replace the link with a proper markdown link
-                let replacement = format!(
-                    "[{}](#{}-{})",
-                    link_text,
-                    target_name.to_lowercase(),
-                    item_type
-                );
-                processed = processed.replace(link_text, &replacement);
-                continue 'outer;
+                }
             }
         }
 
@@ -1688,6 +1652,71 @@ impl fmt::Display for ReturnType {
             Self::Self_ {} => write!(f, "Self"),
         }
     }
+}
+
+/// Helper function to extract the first lifetime from a generics string
+/// For example, from "<'a, T>" it will extract "'a"
+fn extract_first_lifetime(generics_str: &str) -> Option<&str> {
+    // Find the first lifetime parameter (indicated by '<')
+    let start_pos = generics_str.find("<'")?;
+
+    // Find where the lifetime ends (either at a ',' or '>')
+    let remainder = &generics_str[start_pos + 1..];
+    let end_pos = remainder.find([',', '>'])?;
+
+    // Extract the lifetime part
+    let lifetime_part = &remainder[..end_pos];
+
+    // If it has commas, it's part of multiple parameters, so just return the
+    // first one
+    if lifetime_part.contains(',') {
+        lifetime_part.split(',').next()
+    } else {
+        Some(lifetime_part)
+    }
+}
+
+/// Helper function to safely extract a lifetime parameter from struct generics
+fn extract_lifetime_param(struct_details: &StructDetails) -> &'static str {
+    // Default lifetime to use if we can't extract one
+    const DEFAULT_LIFETIME: &str = "'a";
+
+    // Try to extract from generics
+    if let Some(generics) = &struct_details.generics {
+        if !generics.params.is_empty() {
+            if let Some(param) = generics.params.first() {
+                // Serialize to JSON and extract the name field
+                if let Ok(json_value) = serde_json::to_value(param) {
+                    // We can't borrow from this json_value due to lifetime
+                    // issues, so we check if it's the
+                    // expected value and return a static string
+                    if let Some(name_value) = json_value.get("name") {
+                        if let Some(name) = name_value.as_str() {
+                            if name == "'a" {
+                                return "'a";
+                            }
+                            if name == "'b" {
+                                return "'b";
+                            }
+                            if name == "'c" {
+                                return "'c";
+                            }
+                            if name == "'d" {
+                                return "'d";
+                            }
+                            if name == "'static" {
+                                return "'static";
+                            }
+                            // Add other common lifetimes if needed
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Return the default lifetime if extraction failed
+    DEFAULT_LIFETIME
 }
 
 fn format_angle_bracketed_args(args: Option<&GenericArgs>) -> String {
