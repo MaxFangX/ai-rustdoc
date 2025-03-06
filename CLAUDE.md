@@ -11,6 +11,11 @@ test, inspecting its outputs, and making changes to the library to improve the
 markdown output. Please iterate on this using the `just local-ci` command
 instead of running the test directly.
 
+To display a specific range of items modify `START_ITEM` and `END_ITEM` in
+`lib.rs`. I recommend including 2-3 items before and after the one you're
+interested in, so you have some example markdown outputs. However, try to keep
+the range small, so we don't clutter your effective context window.
+
 *Don't* try to read any `rustdoc.json` file. These files are too big to fit in
 your context window. You are welcome to search within it, but generally you
 shouldn't need to - relevant information should be provided in the test output.
