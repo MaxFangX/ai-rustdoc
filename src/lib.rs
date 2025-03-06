@@ -546,6 +546,11 @@ impl RustDocItem {
 
         let Some(name) = &self.name else { return };
 
+        // Skip items that shouldn't be printed
+        if self.skip(doc).is_some() {
+            return;
+        }
+
         // Allow items without docs for trait impls
         let empty_string = String::new();
         let docs_content = self.docs.as_ref().unwrap_or(&empty_string);
@@ -1004,6 +1009,101 @@ impl RustDocItem {
         obj.contains_key("variant")
     }
 
+    // Returns a reason to skip printing this item, or None if it should be
+    // printed
+    pub fn skip(&self, doc: &RustDoc) -> Option<&'static str> {
+        // Check if this is a trait method implementation
+        if self.is_trait_method_implementation(doc) {
+            return Some("trait method implementation (already shown in parent trait impl)");
+        }
+
+        // No reason to skip - item should be printed
+        None
+    }
+
+    // Check if this item is a method implementation for a trait
+    // These are redundant because they're already covered by the trait
+    // implementation display
+    fn is_trait_method_implementation(&self, doc: &RustDoc) -> bool {
+        // Only check function types
+        let Some(inner) = &self.inner else {
+            return false;
+        };
+        let Some(function) = &inner.function else {
+            return false;
+        };
+        let Some(name) = &self.name else {
+            return false;
+        };
+
+        // First approach: Find the ID for this item
+        // to see if it's listed in any impl's items
+        for (item_id, item) in &doc.index {
+            // If this is the current item we're checking
+            if item.name.as_ref() == Some(name) {
+                // Look through all the impls to see if this ID is listed
+                for impl_item in doc.index.values() {
+                    if let Some(impl_inner) = &impl_item.inner {
+                        if let Some(impl_) = &impl_inner.impl_ {
+                            // Only care about trait implementations
+                            if impl_.trait_.is_some() {
+                                // Check if this function is in the impl's items
+                                if impl_.items.contains(item_id) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second approach: if it's a function with a name that matches a trait
+        // method name and its input parameters match the trait method,
+        // consider it a trait method implementation
+        for item in doc.index.values() {
+            // Find trait definitions
+            if let Some(item_inner) = &item.inner {
+                if let Some(trait_info) = &item_inner.trait_ {
+                    // Check if this function's name matches a method in the
+                    // trait
+                    for trait_method_id in &trait_info.items {
+                        if let Some(trait_method) =
+                            doc.index.get(trait_method_id)
+                        {
+                            if let Some(trait_method_name) = &trait_method.name
+                            {
+                                // If names match, check signature
+                                if trait_method_name == name {
+                                    if let Some(trait_method_inner) =
+                                        &trait_method.inner
+                                    {
+                                        if let Some(trait_method_function) =
+                                            &trait_method_inner.function
+                                        {
+                                            // If input param counts match, it's
+                                            // likely the implementation
+                                            if trait_method_function
+                                                .decl
+                                                .inputs
+                                                .len()
+                                                == function.decl.inputs.len()
+                                            {
+                                                return true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     // Process documentation to handle links properly
     fn process_documentation(&self, docs: &str, doc: &RustDoc) -> String {
         if self.links.is_empty() {
@@ -1228,7 +1328,7 @@ impl RustDocItem {
                     format_angle_bracketed_args(resolved_path.args.as_ref());
                 format!("{}{}", resolved_path.name, type_args)
             }
-            _ => "Unknown".to_string(),
+            _ => "/* Unknown */".to_string(),
         };
 
         // Add a heading for the trait implementation
@@ -1683,8 +1783,8 @@ mod test {
         // - ... (TODO)
 
         // Print a subset of items using the below filters.
-        const START_ITEM: usize = 14;
-        const END_ITEM: usize = 18;
+        const START_ITEM: usize = 7;
+        const END_ITEM: usize = 13;
         let items_iter = rust_doc
             .index
             .iter()
@@ -1700,9 +1800,28 @@ mod test {
 
             if !markdown_only {
                 println!("ID: {id}");
-                println!("--- Markdown ---");
+
+                match item.skip(&rust_doc) {
+                    None => {
+                        println!("--- Markdown ---");
+                        item.print(&rust_doc);
+                    }
+                    Some(reason) => {
+                        println!("Skipped: {}", reason);
+                        println!();
+                    }
+                }
+            } else {
+                match item.skip(&rust_doc) {
+                    None => {
+                        item.print(&rust_doc);
+                    }
+                    Some(reason) => {
+                        println!("Skipped: {}", reason);
+                        println!();
+                    }
+                }
             }
-            item.print(&rust_doc);
 
             if !markdown_only {
                 // NOTE: Uncomment this if the debug impl will be helpful for
