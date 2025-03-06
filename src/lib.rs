@@ -1299,7 +1299,7 @@ impl RustDocItem {
                         print!(" -> {ret}");
                     }
 
-                    println!(" {{ /* implementation */ }}");
+                    println!(";");
                 }
             }
         }
