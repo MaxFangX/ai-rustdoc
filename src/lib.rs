@@ -535,6 +535,15 @@ impl RustDocItem {
     }
 
     fn print(&self, doc: &RustDoc) {
+        // Special handling for trait implementations which might have null
+        // names
+        if self.is_impl() && self.name.is_none() {
+            // Print implementation details directly when it's a trait impl
+            // without a name
+            self.print_impl_details(doc);
+            return;
+        }
+
         let Some(name) = &self.name else { return };
 
         // Allow items without docs for trait impls
@@ -1204,17 +1213,104 @@ impl RustDocItem {
         let Some(trait_) = &impl_.trait_ else { return };
         let Some(for_type) = &impl_.for_ else { return };
 
+        // Format the trait name with generic arguments if any
         let trait_name = &trait_.name;
+        let trait_args = if let Some(args) = &trait_.args {
+            format_angle_bracketed_args(Some(args))
+        } else {
+            String::new()
+        };
+
+        // Format the type name with generic arguments if any
         let for_type_name = match for_type {
-            Parameter::ResolvedPath { resolved_path } =>
-                resolved_path.name.clone(),
+            Parameter::ResolvedPath { resolved_path } => {
+                let type_args =
+                    format_angle_bracketed_args(resolved_path.args.as_ref());
+                format!("{}{}", resolved_path.name, type_args)
+            }
             _ => "Unknown".to_string(),
         };
 
-        println!("**Implementation of `{trait_name}` for `{for_type_name}`:**");
+        // Add a heading for the trait implementation
+        println!(
+            "### Implementation of `{}` for `{}`",
+            trait_name, for_type_name
+        );
         println!();
 
-        // Print implementation methods
+        // Print the impl header using a code block for better formatting
+        println!("```rust");
+
+        // Format the trait name with its arguments
+        let trait_full_name = format!("{}{}", trait_name, trait_args);
+
+        // Add generics if the impl has them
+        if let Some(generics) = &impl_.generics {
+            if !generics.params.is_empty() {
+                // Format generics params
+                let mut generics_str = "<".to_string();
+                for (i, param) in generics.params.iter().enumerate() {
+                    if i > 0 {
+                        generics_str.push_str(", ");
+                    }
+                    if let Some(name) = &param.name {
+                        generics_str.push_str(name);
+                    }
+                }
+                generics_str.push('>');
+
+                println!(
+                    "impl{} {} for {} {{",
+                    generics_str, trait_full_name, for_type_name
+                );
+            } else {
+                println!("impl {} for {} {{", trait_full_name, for_type_name);
+            }
+        } else {
+            println!("impl {} for {} {{", trait_full_name, for_type_name);
+        }
+
+        // Print implementation methods in the code block
+        for method_id in &impl_.items {
+            let Some(method_item) = doc.index.get(method_id) else {
+                continue;
+            };
+            let Some(method_name) = &method_item.name else {
+                continue;
+            };
+
+            // Print method signature within the impl block
+            if let Some(inner) = &method_item.inner {
+                if let Some(function) = &inner.function {
+                    print!("    fn {method_name}(");
+
+                    let mut first = true;
+                    for (param_name, param) in &function.decl.inputs {
+                        if !first {
+                            print!(", ");
+                        }
+                        print!("{param_name}: {param}");
+                        first = false;
+                    }
+
+                    print!(")");
+
+                    if let Some(ret) = &function.decl.output {
+                        print!(" -> {ret}");
+                    }
+
+                    println!(" {{ /* implementation */ }}");
+                }
+            }
+        }
+
+        println!("}}");
+        println!("```");
+        println!();
+
+        // Print detailed documentation for each method
+        println!("**Methods:**");
+        println!();
         for method_id in &impl_.items {
             let Some(method_item) = doc.index.get(method_id) else {
                 continue;
